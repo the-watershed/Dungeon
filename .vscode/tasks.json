@@ -1,0 +1,23 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run dungeon game",
+			"type": "shell",
+			"command": "python main.py",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Run pygame dungeon",
+			"type": "shell",
+			"command": "python - << 'PY'\nimport sys\ntry:\n    import pygame\n    print('pygame available:', pygame.__version__)\n    print('OK')\nexcept Exception as e:\n    print('pygame missing or failed to import:', e)\n    sys.exit(1)\nPY",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

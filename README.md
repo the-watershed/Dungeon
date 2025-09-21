@@ -1,52 +1,73 @@
-# Dungeon Cells Demo
+# ASCII Dungeon Crawler
 
-A single-file Python demo of a first-person dungeon built from 1x1x1 "cells". Each cell has six faces labeled as floor, ceiling, wall, door, or pass. Adjacent cells connected as PASS/DOOR open their shared faces to form rooms and hallways.
+A top-down, grid-based dungeon crawler rendered with ASCII characters.
 
-- 1920x1080 window, rectilinear perspective, FOV 100°
-- Per-pixel lighting (ambient + diffuse + specular) using OpenGL shaders
-- WASD to move, Q/E to turn, ESC to quit
+- `#` walls
+- space ` ` floor
+- `@` player
+- Per-tile lighting using field-of-view (shadowcasting) with brightness falloff
+- WASD movement, `Q` or `Esc` to quit
 
-## Install
+Two renderers are supported:
+- Pygame windowed mode (default): 1600x1200 window, 80x40 character grid
+- Terminal mode (legacy): ANSI-based (not default anymore)
 
-Use a recent Python 3.10+ on Windows. Fast path:
+## Run (Pygame window)
 
-```pwsh
-./setup.ps1
+Install dependency:
+
+```powershell
+pip install -r .\requirements.txt
 ```
 
-If PowerShell blocks the script, allow local scripts in the current session:
+Start the game:
 
-```pwsh
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-./setup.ps1
+```powershell
+python .\main.py
 ```
 
-Manual steps (equivalent):
+## Settings
 
-```pwsh
-python -m venv .venv
-. .venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+Customize ASCII characters in `settings.json`:
+
+```json
+{
+  "floor": " ",
+  "wall": "#",
+  "player": "@",
+  "dark": " ",
+  "hud_text": true
+}
 ```
 
-If you have issues with PyOpenGL, try also installing your GPU vendor drivers and ensuring OpenGL 3.3+ is supported.
+- floor: character used for traversable tiles (often a single space)
+- wall: character for walls
+- player: character for the player avatar
+- dark: character for tiles outside light radius (space for full darkness)
+- hud_text: toggle HUD text at the bottom of the window
 
-## Run
+## Minimap
 
-```pwsh
-python main.py
+A fog-of-war minimap is rendered as a pixel grid (not characters) for clarity.
+Configure via `settings.json`:
+
+```json
+"minimap": {
+  "enabled": true,
+  "tile": 4,
+  "margin": 8,
+  "position": "top-right"  // top-left | top-right | bottom-left | bottom-right
+}
 ```
 
-## Controls
-
-- W/S: forward/back
-- A/D: strafe left/right
-- Q/E: turn left/right
-- Esc: quit
+- Visible tiles: bright gray, walls slightly brighter
+- Explored (not currently visible): dark gray
+- Unseen: black
+- Player: red square
 
 ## Notes
 
-- The sample dungeon builds a 3x3 room with a 1x3 hallway.
-- Collision keeps you inside passable volumes. Floor and ceiling are solid; height is fixed at 0.5 in this demo.
-- All code lives in `main.py` for simplicity.
+- Grid size is fixed to 80x40 in windowed mode (each cell is 20x30 pixels).
+- Lighting radius is 3 tiles; tweak `LIGHT_RADIUS` in `main.py`.
+- Generation uses simple rooms and corridors.
+- If you need the terminal renderer, call `run_terminal()` from `main()` manually.

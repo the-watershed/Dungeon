@@ -1,0 +1,7 @@
+{
+  "floor": "#",
+  "wall": "#",
+  "player": "@",
+  "dark": " ",
+  "hud_text": true
+}
