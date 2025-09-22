@@ -33,6 +33,7 @@ def load_settings(path: str):
 		"player": "@",
 		"dark": " ",  # outside light radius
 		"hud_text": True,
+		"map_style": "parchment",  # parchment | dark
 		"minimap": {
 			"enabled": True,
 			"tile": 4,        # pixels per dungeon tile on minimap
@@ -111,6 +112,7 @@ def clamp(v, a, b):
 
 
 from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon
+from parchment_renderer import ParchmentRenderer
 # ---------------------------
 # Save/Load helpers
 # ---------------------------
@@ -512,6 +514,9 @@ def run_pygame():
 	pygame.display.set_caption("ASCII Dungeon (Resizable)")
 	clock = pygame.time.Clock()
 
+	# Map style setting
+	map_style = (SETTINGS.get('map_style', 'parchment') or 'parchment').lower()
+
 	# Font/glyph cache builder (rebuild on resize)
 	preferred_fonts = ["Courier New", "Consolas", "Lucida Console", "DejaVu Sans Mono", "Monaco"]
 
@@ -570,11 +575,20 @@ def run_pygame():
 		return render_glyph
 
 	font = build_font(cell_h)
+
+	# Build parchment background via renderer module (static, no animation). Disable vignette to avoid concentric rings.
+	parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False)
+	parchment_renderer.build_layers(win_w, win_h)
+	parchment_static = parchment_renderer.generate(win_w, win_h)
 	render_glyph = build_glyph_cache(font)
 
 	# Minimap reveal buffers (progress + noise) for watercolor effect
 	mm_reveal = []  # type: list[list[float]]
 	mm_noise = []   # type: list[list[float]]
+
+	# World FoW reveal buffers (progress + noise) similar to minimap
+	wr_reveal = []  # type: list[list[float]]
+	wr_noise = []   # type: list[list[float]]
 
 	def build_minimap_buffers(d: Dungeon):
 		# progress 0..1 and static noise per tile
@@ -589,6 +603,17 @@ def run_pygame():
 	# Minimap helper
 	# Build initial buffers for current dungeon
 	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+
+	def build_world_reveal_buffers(d: Dungeon):
+		# progress 0..1 and static noise per tile for world FoW
+		reveal = [[0.0 for _ in range(d.h)] for _ in range(d.w)]
+		noise = [[(random.random() * 0.3 - 0.15) for _ in range(d.h)] for _ in range(d.w)]
+		for (ex, ey) in explored:
+			if 0 <= ex < d.w and 0 <= ey < d.h:
+				reveal[ex][ey] = 1.0
+		return reveal, noise
+
+	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 
 	def draw_minimap(surface, dungeon, explored_set, visible_set, px, py):
 		mm = SETTINGS.get('minimap', {}) or {}
@@ -719,6 +744,8 @@ def run_pygame():
 		levels.append({'dungeon': dungeon, 'explored': explored, 'player': (px, py)})
 		# rebuild minimap buffers for new level
 		mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+		# rebuild world FoW buffers for new level
+		wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 		current_level_index = len(levels) - 1
 
 	# Initialize with first level
@@ -726,6 +753,8 @@ def run_pygame():
 	levels.append({'dungeon': dungeon, 'explored': explored, 'player': (px, py)})
 	# build minimap buffers for initial level
 	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+	# build world FoW buffers for initial level
+	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 	current_level_index = 0
 
 	# Menu state
@@ -958,9 +987,13 @@ def run_pygame():
 			if 0 <= ex < dungeon.w and 0 <= ey < dungeon.h:
 				if mm_reveal[ex][ey] < 1.0:
 					mm_reveal[ex][ey] = clamp(mm_reveal[ex][ey] + dt * reveal_rate, 0.0, 1.0)
+				# Animate world FoW reveal similarly
+				if wr_reveal[ex][ey] < 1.0:
+					wr_reveal[ex][ey] = clamp(wr_reveal[ex][ey] + dt * reveal_rate, 0.0, 1.0)
 
 		# Render
-		screen.fill(WORLD_BG)
+		# Static parchment background (no spiral/animation)
+		screen.blit(parchment_static, (0, 0))
 		off_x, off_y = compute_offsets()
 
 		# Camera centered on player; viewport size is map_w x grid_h
@@ -970,11 +1003,11 @@ def run_pygame():
 		cam_x = px - view_w // 2
 		cam_y = py - view_h // 2
 
-		# Draw UI border along the visible rows only
+		# Do not paint an opaque viewport background; let parchment show under floors
+
+		# Draw UI border across the full window height (in grid rows)
 		for sy in range(view_h):
-			wy = cam_y + sy
-			if 0 <= wy < dungeon.h:
-				draw_char_at(BORDER_COL, sy, WALL_CH, scale_color(WALL_LIGHT, 0.9))
+			draw_char_at(BORDER_COL, sy, WALL_CH, scale_color(WALL_LIGHT, 0.9))
 
 		# Draw tiles in viewport window
 		for sy in range(view_h):
@@ -993,19 +1026,42 @@ def run_pygame():
 							d = visible[world_pos]
 							t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
 							t = clamp(t, 0.0, 1.0)
-							bw = 0.6 + 0.4 * t
-							color = scale_color(WALL_LIGHT, bw)
+							if map_style == 'dark':
+								# Dark style walls: darker brown
+								base_col = FLOOR_BROWN
+								bw = 0.7 + 0.3 * t
+								color = scale_color(base_col, bw)
+							else:
+								bw = 0.6 + 0.4 * t
+								color = scale_color(WALL_LIGHT, bw)
 							draw_ch = WALL_CH
 						else:
 							d = visible[world_pos]
 							t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
 							t = clamp(t, 0.0, 1.0)
 							bf = 0.45 + 0.35 * t
+							# Floors drawn as blank (space) so parchment shows through in all styles
 							color = scale_color(FLOOR_MED, bf)
-							draw_ch = '#'
-					else:
-						# Out-of-bounds draws darkness glyph for consistency
-						draw_ch = DARK_CH
+							draw_ch = ' '
+					# Explored but not currently visible: dimmed FoW rendering
+					elif (wx, wy) in explored:
+						prog = wr_reveal[wx][wy]
+						noi = wr_noise[wx][wy]
+						alpha = clamp(pow(clamp(prog + noi, 0.0, 1.0), 1.8), 0.0, 1.0)
+						if tile == TILE_WALL:
+							if map_style == 'dark':
+								base_col = scale_color(FLOOR_BROWN, 0.7)  # dim darker walls
+							else:
+								base_col = scale_color(WALL_LIGHT, 0.55)  # dim walls
+						else:
+							base_col = scale_color(FLOOR_MED, 0.28)   # dim floors
+						# Fade glyph in based on alpha
+						color = scale_color(base_col, alpha)
+						draw_ch = WALL_CH if tile == TILE_WALL else ' '
+				# else: out-of-bounds rendering
+				else:
+					# Do not draw anything out-of-bounds; leave background visible
+					draw_ch = ' '
 
 				if draw_ch != ' ':
 					surf = render_glyph(draw_ch, color)
