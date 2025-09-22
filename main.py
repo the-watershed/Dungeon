@@ -3,6 +3,7 @@ import sys
 import time
 import random
 import math
+import re
 
 # Windows-specific: enable ANSI escape processing for colors/cursor control
 msvcrt = None  # ensure defined on all platforms
@@ -60,6 +61,9 @@ WALL_CH = SETTINGS.get('wall', '#')
 PLAYER_CH = SETTINGS.get('player', '@')
 DARK_CH = SETTINGS.get('dark', ' ')
 
+# Save directory
+SAVE_DIR = os.path.join(os.path.dirname(__file__), 'saves')
+
 LIGHT_RADIUS = 3  # tiles
 FPS = 30
 MAX_ROOMS = 25
@@ -69,10 +73,28 @@ ROOM_MAX_SIZE = 9
 # Pygame rendering base configuration
 BASE_GRID_W = 80
 BASE_GRID_H = 40
-BASE_WIN_W = 1600
-BASE_WIN_H = 1200
+BASE_WIN_W = 800
+BASE_WIN_H = 600
 BASE_CELL_W = BASE_WIN_W // BASE_GRID_W  # 20
 BASE_CELL_H = BASE_WIN_H // BASE_GRID_H  # 30
+
+# Parchment palette (RGB) and world palette
+# Parchment remains for minimap; world uses dark background with brown tones
+PARCHMENT_BG = (245, 237, 215)
+WORLD_BG = (32, 24, 16)        # dark brown background
+WALL_LIGHT = (200, 170, 120)   # light brown for walls
+FLOOR_MED = (140, 100, 60)     # medium brown for floors
+WALL_BROWN = (140, 100, 60)    # kept for minimap
+FLOOR_BROWN = (100, 75, 45)    # kept for minimap
+INK_DARK = (40, 28, 18)        # for accents and text
+PLAYER_GREEN = (60, 240, 90)   # bright green for player '@'
+
+def scale_color(color, factor):
+	f = max(0.0, min(1.0, factor))
+	r = min(255, int(color[0] * f))
+	g = min(255, int(color[1] * f))
+	b = min(255, int(color[2] * f))
+	return (r, g, b)
 
 
 def get_term_size():
@@ -88,80 +110,97 @@ def clamp(v, a, b):
 	return max(a, min(b, v))
 
 
-class Rect:
-	def __init__(self, x, y, w, h):
-		self.x1 = x
-		self.y1 = y
-		self.x2 = x + w
-		self.y2 = y + h
-
-	def center(self):
-		cx = (self.x1 + self.x2) // 2
-		cy = (self.y1 + self.y2) // 2
-		return cx, cy
-
-	def intersect(self, other):
-		return (self.x1 < other.x2 and self.x2 > other.x1 and
-				self.y1 < other.y2 and self.y2 > other.y1)
+from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon
+# ---------------------------
+# Save/Load helpers
+# ---------------------------
+def encode_tiles(dungeon: 'Dungeon'):
+	# rows as strings of '0' floor and '1' wall
+	rows = []
+	for y in range(dungeon.h):
+		row = ['1' if dungeon.tiles[x][y] == TILE_WALL else '0' for x in range(dungeon.w)]
+		rows.append(''.join(row))
+	return rows
 
 
-TILE_FLOOR = 0
-TILE_WALL = 1
+def decode_tiles(rows):
+	h = len(rows)
+	w = len(rows[0]) if h > 0 else 0
+	d = Dungeon(w, h)
+	for y, row in enumerate(rows):
+		for x, ch in enumerate(row):
+			d.tiles[x][y] = TILE_WALL if ch == '1' else TILE_FLOOR
+	return d
 
 
-class Dungeon:
-	def __init__(self, w, h):
-		self.w = w
-		self.h = h
-		# Initialize all walls (tile types, not display chars)
-		self.tiles = [[TILE_WALL for _ in range(h)] for _ in range(w)]
-		self.rooms = []  # list[Rect]
+def session_to_dict(dungeon: 'Dungeon', explored: set, px: int, py: int, levels=None, current_index=0):
+	if levels is None:
+		levels = []
+	# include current dungeon as level 0 if levels is empty
+	if not levels:
+		levels = [{
+			'w': dungeon.w,
+			'h': dungeon.h,
+			'tiles': encode_tiles(dungeon),
+			'explored': list(sorted(explored)),
+			'player': [px, py],
+		}]
+		current_index = 0
+	data = {
+		'current_index': current_index,
+		'levels': levels,
+	}
+	return data
 
-	def carve_room(self, room: Rect):
-		for x in range(room.x1 + 1, room.x2 - 1):
-			for y in range(room.y1 + 1, room.y2 - 1):
-				if 0 <= x < self.w and 0 <= y < self.h:
-					self.tiles[x][y] = TILE_FLOOR
 
-	def carve_h_tunnel(self, x1, x2, y):
-		for x in range(min(x1, x2), max(x1, x2) + 1):
-			if 0 <= x < self.w and 0 <= y < self.h:
-				self.tiles[x][y] = TILE_FLOOR
+def dict_to_session(data):
+	try:
+		idx = int(data.get('current_index', 0))
+		levels = data.get('levels', [])
+		if not levels:
+			raise ValueError('No levels in save')
+		idx = max(0, min(idx, len(levels) - 1))
+		cur = levels[idx]
+		d = decode_tiles(cur['tiles'])
+		explored_list = cur.get('explored', [])
+		explored = set(tuple(e) for e in explored_list)
+		px, py = cur.get('player', [1, 1])
+		return d, explored, int(px), int(py), levels, idx
+	except Exception as e:
+		raise
 
-	def carve_v_tunnel(self, y1, y2, x):
-		for y in range(min(y1, y2), max(y1, y2) + 1):
-			if 0 <= x < self.w and 0 <= y < self.h:
-				self.tiles[x][y] = TILE_FLOOR
 
-	def generate(self, max_rooms=MAX_ROOMS, room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE):
-		for _ in range(max_rooms):
-			w = random.randint(room_min, room_max)
-			h = random.randint(room_min, room_max)
-			x = random.randint(1, max(1, self.w - w - 2))
-			y = random.randint(1, max(1, self.h - h - 2))
-			new_room = Rect(x, y, w, h)
+def sanitize_name(name: str) -> str:
+	name = name.strip()
+	name = re.sub(r"[^A-Za-z0-9_-]+", "_", name)
+	return name[:40] if name else "player"
 
-			if any(new_room.intersect(other) for other in self.rooms):
-				continue
 
-			self.carve_room(new_room)
-			if self.rooms:
-				# connect to previous room with a corridor
-				(prev_x, prev_y) = self.rooms[-1].center()
-				(new_x, new_y) = new_room.center()
-				if random.random() < 0.5:
-					self.carve_h_tunnel(prev_x, new_x, prev_y)
-					self.carve_v_tunnel(prev_y, new_y, new_x)
-				else:
-					self.carve_v_tunnel(prev_y, new_y, prev_x)
-					self.carve_h_tunnel(prev_x, new_x, new_y)
+def save_session(name: str, dungeon: 'Dungeon', explored: set, px: int, py: int, levels=None, current_index=0):
+	os.makedirs(SAVE_DIR, exist_ok=True)
+	data = session_to_dict(dungeon, explored, px, py, levels=levels, current_index=current_index)
+	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
+	with open(path, 'w', encoding='utf-8') as f:
+		json.dump(data, f)
+	return path
 
-			self.rooms.append(new_room)
 
-	def is_wall(self, x, y):
-		if 0 <= x < self.w and 0 <= y < self.h:
-			return self.tiles[x][y] == TILE_WALL
-		return True
+def load_session(name: str):
+	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
+	with open(path, 'r', encoding='utf-8') as f:
+		data = json.load(f)
+	return dict_to_session(data)
+
+
+def list_saves():
+	if not os.path.isdir(SAVE_DIR):
+		return []
+	files = []
+	for fn in os.listdir(SAVE_DIR):
+		if fn.lower().endswith('.json'):
+			files.append(os.path.splitext(fn)[0])
+	files.sort()
+	return files
 
 
 # Field of View via symmetrical shadowcasting (8 octants)
@@ -319,8 +358,9 @@ def run_terminal():
 	rows = max(15, rows - 1)
 	cols = max(40, cols)
 
-	dungeon = Dungeon(cols, rows)
-	dungeon.generate()
+	# Use modular dungeon generator
+	dungeon = generate_dungeon(cols, rows, complexity=0.5, length=MAX_ROOMS,
+		room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE)
 
 	# Place player at center of first room or fallback to first open tile
 	if dungeon.rooms:
@@ -432,8 +472,8 @@ def run_pygame():
 
 	# Dungeon uses the remaining columns
 	map_w = max(10, grid_w - UI_COLS - 1)
-	dungeon = Dungeon(map_w, grid_h)
-	dungeon.generate()
+	dungeon = generate_dungeon(map_w, grid_h, complexity=0.5, length=MAX_ROOMS,
+		room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE)
 
 	# Place player
 	if dungeon.rooms:
@@ -468,24 +508,48 @@ def run_pygame():
 
 	# Initialize Pygame
 	pygame.init()
-	screen = pygame.display.set_mode((win_w, win_h), pygame.RESIZABLE)
+	screen = pygame.display.set_mode((win_w, win_h))
 	pygame.display.set_caption("ASCII Dungeon (Resizable)")
 	clock = pygame.time.Clock()
 
 	# Font/glyph cache builder (rebuild on resize)
-	preferred_fonts = ["Consolas", "Courier New", "Lucida Console", "DejaVu Sans Mono"]
+	preferred_fonts = ["Courier New", "Consolas", "Lucida Console", "DejaVu Sans Mono", "Monaco"]
 
 	def build_font(ch_h):
-		# make font size slightly smaller than cell height
-		size = max(8, ch_h - 4)
-		for fname in preferred_fonts:
-			try:
-				f = pygame.font.SysFont(fname, size)
-				if f is not None:
-					return f
-			except Exception:
-				continue
-		return pygame.font.Font(None, size)
+		# Improve crispness by choosing the largest font that fits the cell exactly
+		# Try settings overrides first, then preferred list, scanning down sizes
+		max_size = max(6, min(48, ch_h))
+		font_file = (SETTINGS.get('font_file') or '').strip()
+		font_name = (SETTINGS.get('font_name') or '').strip()
+		candidates = []
+		if font_file:
+			path = os.path.join(os.path.dirname(__file__), font_file)
+			if os.path.isfile(path):
+				candidates.append(("file", path))
+		if font_name:
+			candidates.append(("sys", font_name))
+		for fam in preferred_fonts:
+			candidates.append(("sys", fam))
+
+		best = None
+		for size in range(max_size, 5, -1):
+			for kind, ident in candidates:
+				try:
+					f = pygame.font.Font(ident, size) if kind == "file" else pygame.font.SysFont(ident, size)
+					# Measure a wide sample to ensure width/height fit in cell
+					sample = "W#@"
+					surf = f.render(sample, False, (255, 255, 255))
+					gw = surf.get_width() // len(sample)
+					gh = surf.get_height()
+					if gw <= cell_w - 1 and gh <= cell_h - 1:
+						return f
+					# Track last font in case nothing fits; prefer Courier New
+					if best is None and ident:
+						best = f
+				except Exception:
+					continue
+		# Fallback
+		return best or pygame.font.Font(None, max(6, ch_h - 4))
 
 	def build_glyph_cache(font_obj):
 		# Characters we need to render
@@ -495,11 +559,12 @@ def run_pygame():
 			if extra != ' ':
 				glyphs_needed.add(extra)
 		cache = {}
+		antialias = bool(SETTINGS.get('font_antialias', True))
 		def render_glyph(ch, color=(255, 255, 255)):
 			key = (ch, color)
 			surf = cache.get(key)
 			if surf is None:
-				surf = font_obj.render(ch, False, color)
+				surf = font_obj.render(ch, antialias, color)
 				cache[key] = surf
 			return surf
 		return render_glyph
@@ -507,7 +572,24 @@ def run_pygame():
 	font = build_font(cell_h)
 	render_glyph = build_glyph_cache(font)
 
+	# Minimap reveal buffers (progress + noise) for watercolor effect
+	mm_reveal = []  # type: list[list[float]]
+	mm_noise = []   # type: list[list[float]]
+
+	def build_minimap_buffers(d: Dungeon):
+		# progress 0..1 and static noise per tile
+		reveal = [[0.0 for _ in range(d.h)] for _ in range(d.w)]
+		noise = [[(random.random() * 0.3 - 0.15) for _ in range(d.h)] for _ in range(d.w)]
+		# any already-explored tiles start fully revealed
+		for (ex, ey) in explored:
+			if 0 <= ex < d.w and 0 <= ey < d.h:
+				reveal[ex][ey] = 1.0
+		return reveal, noise
+
 	# Minimap helper
+	# Build initial buffers for current dungeon
+	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+
 	def draw_minimap(surface, dungeon, explored_set, visible_set, px, py):
 		mm = SETTINGS.get('minimap', {}) or {}
 		if not mm.get('enabled', True):
@@ -529,52 +611,48 @@ def run_pygame():
 			ox, oy = win_w - w_px - margin, margin
 
 		# Draw background frame (optional)
-		pygame.draw.rect(surface, (20, 20, 20), (ox - 2, oy - 2, w_px + 4, h_px + 4))
-		pygame.draw.rect(surface, (80, 80, 80), (ox - 2, oy - 2, w_px + 4, h_px + 4), 1)
+		pygame.draw.rect(surface, PARCHMENT_BG, (ox - 2, oy - 2, w_px + 4, h_px + 4))
+		pygame.draw.rect(surface, scale_color(INK_DARK, 0.7), (ox - 2, oy - 2, w_px + 4, h_px + 4), 1)
 
-		vis_color = (220, 220, 220)
-		exp_color = (90, 90, 90)
+		# Colors for minimap
+		vis_floor = scale_color(FLOOR_BROWN, 0.9)
+		vis_wall = scale_color(WALL_BROWN, 1.0)
+		exp_floor = scale_color(FLOOR_BROWN, 0.5)
+		exp_wall = scale_color(WALL_BROWN, 0.6)
+
+		def lerp(c1, c2, a):
+			ar = clamp(a, 0.0, 1.0)
+			return (
+				int(c1[0] + (c2[0] - c1[0]) * ar),
+				int(c1[1] + (c2[1] - c1[1]) * ar),
+				int(c1[2] + (c2[2] - c1[2]) * ar),
+			)
 		wall_boost = 30
 
 		for y in range(dungeon.h):
 			for x in range(dungeon.w):
 				rect = (ox + x * t, oy + y * t, t, t)
-				if (x, y) in visible_set:
-					# brighter for visible tiles; walls slightly brighter
-					if dungeon.tiles[x][y] == TILE_WALL:
-						c = tuple(min(255, v + wall_boost) for v in vis_color)
+				if (x, y) in explored_set or (x, y) in visible_set:
+					# choose target color based on current visibility
+					if (x, y) in visible_set:
+						c_target = vis_wall if dungeon.tiles[x][y] == TILE_WALL else vis_floor
 					else:
-						c = vis_color
-					surface.fill(c, rect)
-				elif (x, y) in explored_set:
-					# explored but not visible
-					if dungeon.tiles[x][y] == TILE_WALL:
-						c = tuple(min(255, v + wall_boost) for v in exp_color)
-					else:
-						c = exp_color
+						c_target = exp_wall if dungeon.tiles[x][y] == TILE_WALL else exp_floor
+					# watercolor-like reveal from parchment using per-tile progress and noise
+					prog = mm_reveal[x][y] if 0 <= x < dungeon.w and 0 <= y < dungeon.h else 1.0
+					noi = mm_noise[x][y] if 0 <= x < dungeon.w and 0 <= y < dungeon.h else 0.0
+					alpha = clamp(pow(clamp(prog + noi, 0.0, 1.0), 1.8), 0.0, 1.0)
+					c = lerp(PARCHMENT_BG, c_target, alpha)
 					surface.fill(c, rect)
 				else:
 					# unseen stays black (implicit)
 					pass
 
-		# Player marker
+		# Player marker (bright green)
 		pr = (ox + px * t, oy + py * t, t, t)
-		surface.fill((255, 70, 70), pr)
+		surface.fill(PLAYER_GREEN, pr)
 
-	def resize_window(new_w, new_h):
-		nonlocal win_w, win_h, grid_w, grid_h, cell_w, cell_h, font, render_glyph
-		win_w, win_h = max(200, new_w), max(150, new_h)
-		screen_flags = pygame.RESIZABLE
-		pygame.display.set_mode((win_w, win_h), screen_flags)
-
-		# Keep character count fixed; adjust cell size instead
-		grid_w, grid_h = BASE_GRID_W, BASE_GRID_H
-		cell_w = max(5, win_w // grid_w)
-		cell_h = max(8, win_h // grid_h)
-
-		# Rebuild font and glyph cache for new cell size
-		font = build_font(cell_h)
-		render_glyph = build_glyph_cache(font)
+	# No resize in fixed-window mode
 
 	# Centering offsets (updated each frame based on current sizes)
 	def compute_offsets():
@@ -598,17 +676,265 @@ def run_pygame():
 		for i, ch in enumerate(text[:max_len]):
 			draw_char_at(cell_x + i, cell_y, ch, color)
 
+	# Session state: multi-level support
+	levels = []  # list of dicts: { 'dungeon': Dungeon, 'explored': set[(x,y)], 'player': (px,py) }
+	current_level_index = 0
+
+	def snapshot_current():
+		return {'dungeon': dungeon, 'explored': set(explored), 'player': (px, py)}
+
+	def collect_levels_for_save(level_list):
+		out = []
+		for lvl in level_list:
+			d = lvl['dungeon']
+			exp = lvl['explored']
+			pxx, pyy = lvl['player']
+			out.append({
+				'w': d.w,
+				'h': d.h,
+				'tiles': encode_tiles(d),
+				'explored': list(sorted(exp)),
+				'player': [pxx, pyy],
+			})
+		return out
+
+	def push_new_level():
+		nonlocal dungeon, fov, explored, px, py, current_level_index
+		nonlocal mm_reveal, mm_noise
+		# Save snapshot of current first
+		if levels:
+			levels[current_level_index] = snapshot_current()
+		# Create new level same size as current dungeon window
+		nd = generate_dungeon(map_w, grid_h, complexity=0.5, length=MAX_ROOMS,
+			room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE)
+		# place player
+		if nd.rooms:
+			pxn, pyn = nd.rooms[0].center()
+		else:
+			pxn, pyn = 1, 1
+		dungeon = nd
+		fov = FOV(dungeon)
+		explored = set()
+		px, py = pxn, pyn
+		levels.append({'dungeon': dungeon, 'explored': explored, 'player': (px, py)})
+		# rebuild minimap buffers for new level
+		mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+		current_level_index = len(levels) - 1
+
+	# Initialize with first level
+	px, py = (dungeon.rooms[0].center() if dungeon.rooms else (1, 1))
+	levels.append({'dungeon': dungeon, 'explored': explored, 'player': (px, py)})
+	# build minimap buffers for initial level
+	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+	current_level_index = 0
+
+	# Menu state
+	menu_open = False
+	menu_mode = 'main'  # main | settings | save | load
+	menu_index = 0
+	save_name = ""
+	load_index = 0
+	load_names = []
+
+	def draw_menu():
+		# DnD-style ASCII menu frame + banner
+		box_w = 58
+		box_h = 24
+		x0 = (grid_w - box_w) // 2
+		y0 = (grid_h - box_h) // 2
+
+		# Colors (cream background with dark ink)
+		frame_col = scale_color(INK_DARK, 1.0)
+		title_col = scale_color(INK_DARK, 1.0)
+		text_col = scale_color(INK_DARK, 0.95)
+		dim_col = scale_color(INK_DARK, 0.6)
+
+		# Fill background behind the menu with cream for maximum contrast
+		off_x, off_y = compute_offsets()
+		px = off_x + x0 * cell_w
+		py = off_y + y0 * cell_h
+		wpx = box_w * cell_w
+		hpx = box_h * cell_h
+		pygame.draw.rect(screen, PARCHMENT_BG, (px, py, wpx, hpx))
+
+		# Border (clean, high-contrast, no noisy fill)
+		# Top and bottom
+		for x in range(box_w):
+			ch = '=' if 0 < x < box_w - 1 else '+'
+			draw_char_at(x0 + x, y0, ch, frame_col)
+			draw_char_at(x0 + x, y0 + box_h - 1, ch, frame_col)
+		# Sides
+		for y in range(1, box_h - 1):
+			draw_char_at(x0, y0 + y, '|', frame_col)
+			draw_char_at(x0 + box_w - 1, y0 + y, '|', frame_col)
+		# Interior left blank (background already filled)
+
+		# Banner (original ASCII, DnD-ish motif)
+		banner = [
+			"o=={::::::::::::::::::::::::::::::::::::::::::::}==o",
+			"       <<  D U N G E O N   M E N U  >>        ",
+			"'=={::::::::::::::::::::::::::::::::::::::::::::}=='",
+		]
+		for i, line in enumerate(banner):
+			bx = x0 + (box_w - len(line)) // 2
+			draw_text_line(bx, y0 + 1 + i, line, title_col)
+
+		def draw_opts(opts, sel_idx, ystart):
+			for i, text in enumerate(opts):
+				selected = (i == sel_idx)
+				col = title_col if selected else text_col
+				prefix = ">> " if selected else "   "
+				suffix = " <<" if selected else ""
+				line = f"{prefix}{text}{suffix}"
+				draw_text_line(x0 + 3, y0 + ystart + i, line, col, box_w - 6)
+
+		if menu_mode == 'main':
+			options = ["Settings", "Save", "Load", "Quit"]
+			draw_opts(options, menu_index, 6)
+		elif menu_mode == 'settings':
+			hud = "On" if SETTINGS.get('hud_text', True) else "Off"
+			mm = SETTINGS.get('minimap', {})
+			mme = "On" if (mm.get('enabled', True)) else "Off"
+			options = [f"HUD: {hud}", f"Minimap: {mme}", "Back"]
+			draw_opts(options, menu_index, 6)
+		elif menu_mode == 'save':
+			prompt = "Name thy hero and press Enter:"
+			draw_text_line(x0 + 3, y0 + 6, prompt, text_col, box_w - 6)
+			draw_text_line(x0 + 3, y0 + 8, "> " + save_name, title_col, box_w - 6)
+			draw_text_line(x0 + 3, y0 + box_h - 3, "Esc: Back", dim_col)
+		elif menu_mode == 'load':
+			if not load_names:
+				draw_text_line(x0 + 3, y0 + 6, "No chronicles found.", text_col)
+				draw_text_line(x0 + 3, y0 + box_h - 3, "Esc: Back", dim_col)
+			else:
+				draw_text_line(x0 + 3, y0 + 6, "Select a chronicle:", text_col)
+				for i, nm in enumerate(load_names):
+					col = title_col if i == load_index else text_col
+					prefix = ">> " if i == load_index else "   "
+					draw_text_line(x0 + 3, y0 + 8 + i, prefix + nm, col, box_w - 6)
+					draw_text_line(x0 + 3, y0 + box_h - 3, "Enter: Load | Esc: Back", dim_col)
+
 	running = True
 	while running:
 		# Input
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
 				running = False
-			elif event.type == pygame.VIDEORESIZE:
-				resize_window(event.w, event.h)
 			elif event.type == pygame.KEYDOWN:
-				if event.key in (pygame.K_ESCAPE, pygame.K_q):
+				if event.key == pygame.K_ESCAPE:
+					if menu_open:
+						if menu_mode in ('save', 'load'):
+							menu_mode = 'main'
+						elif menu_mode == 'settings':
+							menu_mode = 'main'
+						else:
+							menu_open = False
+					else:
+						menu_open = True
+						menu_mode = 'main'
+						menu_index = 0
+						save_name = ""
+						load_names = list_saves()
+						load_index = 0
+					continue
+				if event.key == pygame.K_q and not menu_open:
 					running = False
+				# Developer hotkey: generate new level 'N'
+				if event.key == pygame.K_n and not menu_open:
+					push_new_level()
+					continue
+
+				if menu_open:
+					# Menu navigation
+					if menu_mode == 'main':
+						if event.key in (pygame.K_w, pygame.K_UP):
+							menu_index = (menu_index - 1) % 4
+						elif event.key in (pygame.K_s, pygame.K_DOWN):
+							menu_index = (menu_index + 1) % 4
+						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+							if menu_index == 0:  # Settings
+								menu_mode = 'settings'
+								menu_index = 0
+							elif menu_index == 1:  # Save
+								menu_mode = 'save'
+								save_name = ""
+							elif menu_index == 2:  # Load
+								menu_mode = 'load'
+								load_names = list_saves()
+								load_index = 0
+							elif menu_index == 3:  # Quit
+								running = False
+					elif menu_mode == 'settings':
+						if event.key in (pygame.K_w, pygame.K_UP):
+							menu_index = (menu_index - 1) % 3
+						elif event.key in (pygame.K_s, pygame.K_DOWN):
+							menu_index = (menu_index + 1) % 3
+						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+							if menu_index == 0:  # toggle HUD
+								SETTINGS['hud_text'] = not SETTINGS.get('hud_text', True)
+							elif menu_index == 1:  # toggle minimap
+								mm = SETTINGS.get('minimap', {})
+								mm['enabled'] = not mm.get('enabled', True)
+								SETTINGS['minimap'] = mm
+							else:
+								menu_mode = 'main'
+						# no player movement when menu open
+						continue
+					elif menu_mode == 'save':
+						# text input
+						if event.key == pygame.K_BACKSPACE:
+							save_name = save_name[:-1]
+						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+							nm = sanitize_name(save_name)
+							if nm:
+								# update current snapshot, then save all levels
+								if levels:
+									levels[current_level_index] = snapshot_current()
+								path = save_session(nm, dungeon, explored, px, py,
+													levels=collect_levels_for_save(levels),
+													current_index=current_level_index)
+								menu_mode = 'main'
+						else:
+							ch = event.unicode
+							if ch and re.match(r"[A-Za-z0-9_-]", ch):
+								if len(save_name) < 40:
+									save_name += ch
+						continue
+					elif menu_mode == 'load':
+						if not load_names:
+							continue
+						if event.key in (pygame.K_w, pygame.K_UP):
+							load_index = (load_index - 1) % len(load_names)
+						elif event.key in (pygame.K_s, pygame.K_DOWN):
+							load_index = (load_index + 1) % len(load_names)
+						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+							nm = load_names[load_index]
+							try:
+								d2, exp2, px2, py2, levels_data, idx = load_session(nm)
+								# rebuild in-memory levels from save
+								new_levels = []
+								for lvl in levels_data:
+									dl = decode_tiles(lvl['tiles'])
+									expl = set(tuple(e) for e in lvl.get('explored', []))
+									pl = tuple(lvl.get('player', [1, 1]))
+									new_levels.append({'dungeon': dl, 'explored': expl, 'player': (int(pl[0]), int(pl[1]))})
+								if not new_levels:
+									raise ValueError('Empty save')
+								levels = new_levels
+								current_level_index = int(idx)
+								# switch to current level
+								dungeon = levels[current_level_index]['dungeon']
+								explored = levels[current_level_index]['explored']
+								px, py = levels[current_level_index]['player']
+								fov = FOV(dungeon)
+								# rebuild minimap buffers for loaded level
+								mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+								menu_mode = 'main'
+							except Exception as e:
+								# simple error display in title line
+								pass
+						continue
+				# If we reach here and menu not open, handle game controls
 				dx = dy = 0
 				if event.key == pygame.K_w:
 					dy = -1
@@ -625,68 +951,99 @@ def run_pygame():
 
 		# Update visibility
 		visible = fov.compute(px, py, LIGHT_RADIUS)
+		# Animate minimap reveal
+		dt = clock.get_time() / 1000.0
+		reveal_rate = 2.0
+		for (ex, ey) in explored:
+			if 0 <= ex < dungeon.w and 0 <= ey < dungeon.h:
+				if mm_reveal[ex][ey] < 1.0:
+					mm_reveal[ex][ey] = clamp(mm_reveal[ex][ey] + dt * reveal_rate, 0.0, 1.0)
 
 		# Render
-		screen.fill((0, 0, 0))
+		screen.fill(WORLD_BG)
 		off_x, off_y = compute_offsets()
-		for y in range(dungeon.h):
-			# Draw border at right edge of UI
-			draw_char_at(BORDER_COL, y, WALL_CH, (200, 200, 200))
 
-			for x in range(dungeon.w):
-				tile = dungeon.tiles[x][y]
+		# Camera centered on player; viewport size is map_w x grid_h
+		view_w = map_w
+		view_h = grid_h
+		# Always center camera on player; allow camera to go out-of-bounds
+		cam_x = px - view_w // 2
+		cam_y = py - view_h // 2
+
+		# Draw UI border along the visible rows only
+		for sy in range(view_h):
+			wy = cam_y + sy
+			if 0 <= wy < dungeon.h:
+				draw_char_at(BORDER_COL, sy, WALL_CH, scale_color(WALL_LIGHT, 0.9))
+
+		# Draw tiles in viewport window
+		for sy in range(view_h):
+			wy = cam_y + sy
+			for sx in range(view_w):
+				wx = cam_x + sx
 				draw_ch = ' '
-				color = (255, 255, 255)
-				if (x, y) == (px, py):
-					draw_ch = PLAYER_CH
-					color = (255, 255, 255)
-					explored.add((x, y))
-				elif (x, y) in visible:
-					explored.add((x, y))
-					if tile == TILE_WALL:
-						# wall brightness falloff by distance
-						d = visible[(x, y)]
-						t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
-						t = clamp(t, 0.0, 1.0)
-						c = int(80 + 175 * t)
-						color = (c, c, c)
-						draw_ch = WALL_CH
+				color = INK_DARK
+				if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h:
+					# In-bounds tiles
+					tile = dungeon.tiles[wx][wy]
+					world_pos = (wx, wy)
+					if world_pos in visible:
+						explored.add(world_pos)
+						if tile == TILE_WALL:
+							d = visible[world_pos]
+							t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
+							t = clamp(t, 0.0, 1.0)
+							bw = 0.6 + 0.4 * t
+							color = scale_color(WALL_LIGHT, bw)
+							draw_ch = WALL_CH
+						else:
+							d = visible[world_pos]
+							t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
+							t = clamp(t, 0.0, 1.0)
+							bf = 0.45 + 0.35 * t
+							color = scale_color(FLOOR_MED, bf)
+							draw_ch = '#'
 					else:
-						# floors: draw configured floor with darker brightness falloff than walls
-						d = visible[(x, y)]
-						t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
-						t = clamp(t, 0.0, 1.0)
-						# darker overall: ~35 near edge to ~130 near player
-						cf = int(35 + 95 * t)
-						color = (cf, cf, cf)
-						draw_ch = FLOOR_CH
-				else:
-					# complete darkness outside radius: draw config char
-					draw_ch = DARK_CH
-				# Offset dungeon draw by UI width + border
+						# Out-of-bounds draws darkness glyph for consistency
+						draw_ch = DARK_CH
+
 				if draw_ch != ' ':
 					surf = render_glyph(draw_ch, color)
-					gx = off_x + (UI_COLS + 1 + x) * cell_w + (cell_w - surf.get_width()) // 2
-					gy = off_y + y * cell_h + (cell_h - surf.get_height()) // 2
+					gx = off_x + (UI_COLS + 1 + sx) * cell_w + (cell_w - surf.get_width()) // 2
+					gy = off_y + sy * cell_h + (cell_h - surf.get_height()) // 2
 					screen.blit(surf, (gx, gy))
 
+		# Draw player at the center of the viewport (screen), not moving
+		# Always draw player at the center of the viewport
+		pcx = clamp(view_w // 2, 0, view_w - 1)
+		pcy = clamp(view_h // 2, 0, view_h - 1)
+		surf = render_glyph(PLAYER_CH, PLAYER_GREEN)
+		gx = off_x + (UI_COLS + 1 + pcx) * cell_w + (cell_w - surf.get_width()) // 2
+		gy = off_y + pcy * cell_h + (cell_h - surf.get_height()) // 2
+		screen.blit(surf, (gx, gy))
+
 		# HUD (optional)
-		if SETTINGS.get('hud_text', True):
+		if SETTINGS.get('hud_text', True) and not menu_open:
 			hud_text = f"WASD move, Esc/Q quit | {dungeon.w}x{dungeon.h} | r={LIGHT_RADIUS}"
-			hud_surf = font.render(hud_text, False, (180, 180, 180))
+			hud_surf = font.render(hud_text, False, scale_color(WALL_LIGHT, 1.0))
 			screen.blit(hud_surf, (4, win_h - hud_surf.get_height() - 4))
 
 		# UI panel content (draw after world so it overlays if needed)
 		# Simple sample stats
-		ui_color = (160, 160, 160)
+		ui_color = scale_color(WALL_LIGHT, 0.95)
 		title = "== STATUS =="
-		draw_text_line(0, 0, title[:UI_COLS], (200, 200, 200), UI_COLS)
+		draw_text_line(0, 0, title[:UI_COLS], scale_color(WALL_LIGHT, 1.0), UI_COLS)
 		draw_text_line(0, 2, f"Pos: {px:02d},{py:02d}"[:UI_COLS], ui_color, UI_COLS)
 		draw_text_line(0, 3, f"Size:{dungeon.w:02d}x{dungeon.h:02d}"[:UI_COLS], ui_color, UI_COLS)
 		draw_text_line(0, 4, f"Light:{LIGHT_RADIUS}"[:UI_COLS], ui_color, UI_COLS)
 
 		# Minimap (after UI/world)
-		draw_minimap(screen, dungeon, explored, visible, px, py)
+		if not menu_open:
+			draw_minimap(screen, dungeon, explored, visible, px, py)
+
+		# Draw menu last if open
+		if menu_open:
+			draw_menu()
 
 		pygame.display.flip()
 		clock.tick(FPS)
