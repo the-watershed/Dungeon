@@ -1,0 +1,548 @@
+{
+  "bundle": "High Value Prefabs v1",
+  "prefabs": [
+    {
+      "name": "Egyptian Antechamber",
+      "width": 11,
+      "height": 7,
+      "cells": [
+        "###########",
+        "#.........#",
+        "#.###.###.#",
+        "#.#.....#.#",
+        "#.###.###.#",
+        "#.........#",
+        "###########"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "sand" },
+        ".": { "tile": "floor", "material": "sand" }
+      },
+      "tags": ["egyptian", "crypt", "antechamber"]
+    },
+    {
+      "name": "Prison Cell Block",
+      "width": 13,
+      "height": 7,
+      "cells": [
+        "#############",
+        "#|.|.|.|.|.|#",
+        "#...........#",
+        "#|.|.|.|.|.|#",
+        "#...........#",
+        "#|.|.|.|.|.|#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "cobble" },
+        "|": { "tile": "wall", "material": "iron" }
+      },
+      "tags": ["jail", "prison", "cells"]
+    },
+    {
+      "name": "Open Cave Bowl",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "#######.#######",
+        "#.....***.....#",
+        "#.###.*.*.###.#",
+        "#.#...***...#.#",
+        "#.#..*****..#.#",
+        "#.#...***...#.#",
+        "#.###.*.*.###.#",
+        "#.....***.....#",
+        "#######.#######"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "dirt" },
+        "*": { "tile": "floor", "material": "moss" }
+      },
+      "tags": ["cave", "moss", "open"]
+    },
+    {
+      "name": "Flooded Grotto",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "#######.#######",
+        "#.....~~~.....#",
+        "#.###~.~.###~.#",
+        "#.#...~~~...#.#",
+        "#.#..~~~~~..#.#",
+        "#.#...~~~...#.#",
+        "#.###~.~.###~.#",
+        "#.....~~~.....#",
+        "#######.#######"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "dirt" },
+        "~": { "tile": "floor", "material": "water" }
+      },
+      "tags": ["cave", "water", "grotto"]
+    },
+    {
+      "name": "Lava Vent",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#...........#",
+        "#.###...###.#",
+        "#.#..***..#.#",
+        "#.#.*###*.#.#",
+        "#.#..***..#.#",
+        "#.###...###.#",
+        "#...........#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "cobble" },
+        "*": { "tile": "floor", "material": "lava" }
+      },
+      "tags": ["cave", "lava", "hazard"]
+    },
+    {
+      "name": "Great Hall",
+      "width": 17,
+      "height": 9,
+      "cells": [
+        "#################",
+        "#...............#",
+        "#.###.#####.###.#",
+        "#.#...........#.#",
+        "#.#....+++....#.#",
+        "#.#...........#.#",
+        "#.###.#####.###.#",
+        "#...............#",
+        "#################"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "cobble" },
+        "+": { "tile": "floor", "material": "marble" }
+      },
+      "tags": ["hall", "grand", "marble"]
+    },
+    {
+      "name": "Marble Temple",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#+++++++....#",
+        "#+####+.##.#",
+        "#+++++..##.#",
+        "#+++#++....#",
+        "#+++++..##.#",
+        "#+####+.##.#",
+        "#+++++++....#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "+": { "tile": "floor", "material": "marble" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["temple", "marble", "sanctum"]
+    },
+    {
+      "name": "Wooden Dock",
+      "width": 11,
+      "height": 9,
+      "cells": [
+        "###########",
+        "#~~~~~W~~~#",
+        "#~~~~WWW~~#",
+        "#~~~~WWW~~#",
+        "#~~~~WWW~~#",
+        "#~~~~WWW~~#",
+        "#~~~~~W~~~#",
+        "#~~~~~~~~~#",
+        "###########"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "~": { "tile": "floor", "material": "water" },
+        "W": { "tile": "floor", "material": "wood" }
+      },
+      "tags": ["dock", "water", "wood"]
+    },
+    {
+      "name": "Grassy Courtyard",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#GGGGGGGGGGG#",
+        "#GGG..GG..GG#",
+        "#GG....G..GG#",
+        "#GG..GGG..GG#",
+        "#GG....G..GG#",
+        "#GGG..GG..GG#",
+        "#GGGGGGGGGGG#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "G": { "tile": "floor", "material": "grass" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["outdoor", "garden", "grass"]
+    },
+    {
+      "name": "Collapsed Tunnel",
+      "width": 15,
+      "height": 7,
+      "cells": [
+        "###############",
+        "#.....###.....#",
+        "#..***###***..#",
+        "#..***###***..#",
+        "#..***###***..#",
+        "#.....###.....#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "dirt" },
+        "*": { "tile": "floor", "material": "moss" }
+      },
+      "tags": ["tunnel", "collapsed", "moss"]
+    },
+    {
+      "name": "Chasm Bridge",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "###############",
+        "#~~~~~#####~~~~#",
+        "#~~~~~#...#~~~~#",
+        "#~~~~~#===#~~~~#",
+        "#~~~~~#===#~~~~#",
+        "#~~~~~#===#~~~~#",
+        "#~~~~~#...#~~~~#",
+        "#~~~~~#####~~~~#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "~": { "tile": "floor", "material": "water" },
+        "=": { "tile": "floor", "material": "wood" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["bridge", "river", "wood"]
+    },
+    {
+      "name": "Guard Post",
+      "width": 11,
+      "height": 7,
+      "cells": [
+        "###########",
+        "#..###..|.#",
+        "#..#.#..|.#",
+        "#..#.#..|.#",
+        "#..#.#..|.#",
+        "#..###..|.#",
+        "###########"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "cobble" },
+        "|": { "tile": "wall", "material": "iron" }
+      },
+      "tags": ["guard", "post", "iron"]
+    },
+    {
+      "name": "Treasure Vault",
+      "width": 11,
+      "height": 7,
+      "cells": [
+        "###########",
+        "#|||||||..#",
+        "#|.....|..#",
+        "#|.+++.|..#",
+        "#|.....|..#",
+        "#|||||||..#",
+        "###########"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "|": { "tile": "wall", "material": "iron" },
+        ".": { "tile": "floor", "material": "cobble" },
+        "+": { "tile": "floor", "material": "marble" }
+      },
+      "tags": ["vault", "treasure", "iron"]
+    },
+    {
+      "name": "Maze Segment",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#.#...#...#.#",
+        "#.#.#.#.#.#.#",
+        "#...#...#...#",
+        "###.###.###.#",
+        "#...#...#...#",
+        "#.#.#.#.#.#.#",
+        "#.#...#...#.#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["maze", "puzzle"]
+    },
+    {
+      "name": "Throne Room",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "###############",
+        "#.............#",
+        "#..+++++++....#",
+        "#..+.....+....#",
+        "#..+.MMM.+....#",
+        "#..+.....+....#",
+        "#..+++++++....#",
+        "#.............#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "cobble" },
+        "+": { "tile": "floor", "material": "marble" },
+        "M": { "tile": "floor", "material": "wood" }
+      },
+      "tags": ["throne", "royal", "marble"]
+    },
+    {
+      "name": "Library",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "###############",
+        "#=============#",
+        "#=###===###===#",
+        "#=.#=====#.=.=#",
+        "#=.#=====#.=.=#",
+        "#=.#=====#.=.=#",
+        "#=###===###===#",
+        "#=============#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "=": { "tile": "floor", "material": "wood" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["library", "wood", "study"]
+    },
+    {
+      "name": "Ancient Crypt",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#+++++...+++.#",
+        "#+###+.#.+#..#",
+        "#+++++...+++.#",
+        "#.....+.+....#",
+        "#+++++...+++.#",
+        "#+###+.#.+#..#",
+        "#+++++...+++.#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "sand" },
+        "+": { "tile": "floor", "material": "marble" },
+        ".": { "tile": "floor", "material": "sand" }
+      },
+      "tags": ["crypt", "egyptian", "marble"]
+    },
+    {
+      "name": "Mushroom Grove",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#..***...***.#",
+        "#.*...*.*...*#",
+        "#..***...***.#",
+        "#.*...***...*#",
+        "#..***...***.#",
+        "#.*...*.*...*#",
+        "#..***...***.#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        ".": { "tile": "floor", "material": "dirt" },
+        "*": { "tile": "floor", "material": "moss" }
+      },
+      "tags": ["cave", "mushroom", "moss"]
+    },
+    {
+      "name": "River Bend",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "###############",
+        "#~~~~~......~~#",
+        "#~~~~~~....~~~#",
+        "#~~~~~~~..~~~~#",
+        "#~~~~~~~~~~~~~#",
+        "#~~~~~~~..~~~~#",
+        "#~~~~~~....~~~#",
+        "#~~~~~......~~#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "~": { "tile": "floor", "material": "water" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["river", "water", "bend"]
+    },
+    {
+      "name": "Lava Arena",
+      "width": 15,
+      "height": 11,
+      "cells": [
+        "###############",
+        "#^^^^^^^^^^^^^#",
+        "#^...........^#",
+        "#^..#####....^#",
+        "#^..#...#....^#",
+        "#^..#...#....^#",
+        "#^..#####....^#",
+        "#^...........^#",
+        "#^^^^^^^^^^^^^#",
+        "#^^^^^^^^^^^^^#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "^": { "tile": "floor", "material": "lava" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["arena", "lava", "combat"]
+    },
+    {
+      "name": "Workshop",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#====..====..#",
+        "#=..=..=..=.=#",
+        "#=..====..=.=#",
+        "#=..=..=..=.=#",
+        "#=..====..=.=#",
+        "#=..=..=..=.=#",
+        "#====..====..#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "=": { "tile": "floor", "material": "wood" },
+        ".": { "tile": "floor", "material": "iron" }
+      },
+      "tags": ["workshop", "wood", "iron"]
+    },
+    {
+      "name": "Kitchen",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#====....====#",
+        "#=..=....=..=#",
+        "#=..=....=..=#",
+        "#====....====#",
+        "#=..=....=..=#",
+        "#=..=....=..=#",
+        "#====....====#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "=": { "tile": "floor", "material": "wood" },
+        ".": { "tile": "floor", "material": "dirt" }
+      },
+      "tags": ["kitchen", "wood", "utility"]
+    },
+    {
+      "name": "Armory",
+      "width": 13,
+      "height": 9,
+      "cells": [
+        "#############",
+        "#|||||...||||#",
+        "#|...|...|..|#",
+        "#|...|...|..|#",
+        "#|||||...||||#",
+        "#|...|...|..|#",
+        "#|...|...|..|#",
+        "#|||||...||||#",
+        "#############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "|": { "tile": "wall", "material": "iron" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["armory", "iron", "storage"]
+    },
+    {
+      "name": "Chapel",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "###############",
+        "#+++++.....++++#",
+        "#+++.+++++.+++.#",
+        "#+++.+++++.+++.#",
+        "#+++++.....++++#",
+        "#+++.+++++.+++.#",
+        "#+++.+++++.+++.#",
+        "#+++++.....++++#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "+": { "tile": "floor", "material": "marble" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["chapel", "marble", "sanctum"]
+    },
+    {
+      "name": "Hanging Gardens",
+      "width": 15,
+      "height": 9,
+      "cells": [
+        "###############",
+        "#GGG...GGG...G#",
+        "#G.G...G.G...G#",
+        "#GGG...GGG...G#",
+        "#...GGG...GGG.#",
+        "#G...G.G...G.G#",
+        "#GGG...GGG...G#",
+        "#G...........G#",
+        "###############"
+      ],
+      "legend": {
+        "#": { "tile": "wall", "material": "brick" },
+        "G": { "tile": "floor", "material": "grass" },
+        ".": { "tile": "floor", "material": "cobble" }
+      },
+      "tags": ["garden", "grass", "outdoor"]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Orc Barracks",
+  "version": 1,
+  "width": 11,
+  "height": 7,
+  "cells": [
+    "###########",
+    "#.........#",
+    "#.###.###.#",
+    "#.#.....#.#",
+    "#.###.###.#",
+    "#.........#",
+    "###########"
+  ],
+  "legend": {
+    "#": { "tile": "wall", "material": "brick" },
+    ".": { "tile": "floor", "material": "cobble" },
+    " ": { "tile": "void" }
+  },
+  "tags": ["barracks", "orc", "rooms"],
+  "notes": "Brick perimeter with small bunk alcoves."
+}

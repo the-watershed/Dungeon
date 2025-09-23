@@ -1,0 +1,24 @@
+{
+  "name": "Goblin Warren",
+  "version": 1,
+  "width": 15,
+  "height": 9,
+  "cells": [
+    "####### #######",
+    "#.....# #.....#",
+    "#.###.# #.###.#",
+    "#.#...###...#.#",
+    "#.#.........#.#",
+    "#.#...###...#.#",
+    "#.###.# #.###.#",
+    "#.....# #.....#",
+    "####### #######"
+  ],
+  "legend": {
+    "#": { "tile": "wall", "material": "brick" },
+    ".": { "tile": "floor", "material": "dirt" },
+    " ": { "tile": "void" }
+  },
+  "tags": ["goblin", "warren", "honeycomb"],
+  "notes": "Organic dirt chambers loosely connected around void pockets."
+}

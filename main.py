@@ -89,6 +89,82 @@ WALL_BROWN = (140, 100, 60)    # kept for minimap
 FLOOR_BROWN = (100, 75, 45)    # kept for minimap
 INK_DARK = (40, 28, 18)        # for accents and text
 PLAYER_GREEN = (60, 240, 90)   # bright green for player '@'
+VOID_BG = (12, 12, 14)         # distinct background for outside dungeon
+
+# New tile palette for block rendering (greys)
+# Per request: walls very dark grey, floors light grey (slightly lighter)
+FLOOR_DARK_GREY = (225, 225, 232)   # light grey floors
+WALL_MED_GREY = (40, 40, 46)        # very dark grey walls
+DIRT_BROWN = (110, 86, 60)       # dirt (reserved if needed later)
+MOSS_GREEN = (72, 104, 74)
+SAND_TAN = (196, 174, 120)
+IRON_GREY = (110, 116, 122)
+GRASS_GREEN = (86, 128, 74)
+WATER_BLUE = (50, 110, 170)
+LAVA_ORANGE = (208, 84, 32)
+MARBLE_WHITE = (220, 220, 228)
+WOOD_BROWN = (136, 94, 62)
+
+# Material -> base color mapping (render-agnostic; used by all renderers)
+def base_color_for_material(mat: int):
+	if mat == MAT_BRICK:
+		return WALL_MED_GREY
+	if mat == MAT_DIRT:
+		return DIRT_BROWN
+	if mat == MAT_MOSS:
+		return MOSS_GREEN
+	if mat == MAT_SAND:
+		return SAND_TAN
+	if mat == MAT_IRON:
+		return IRON_GREY
+	if mat == MAT_GRASS:
+		return GRASS_GREEN
+	if mat == MAT_WATER:
+		return WATER_BLUE
+	if mat == MAT_LAVA:
+		return LAVA_ORANGE
+	if mat == MAT_MARBLE:
+		return MARBLE_WHITE
+	if mat == MAT_WOOD:
+		return WOOD_BROWN
+	# default floors
+	return FLOOR_DARK_GREY
+
+def lit_color_for_material(mat: int, t: float):
+	# t in [0,1], near 1 close to player
+	base = base_color_for_material(mat)
+	if mat == MAT_BRICK or mat == MAT_IRON:
+		f = 0.6 + 0.4 * t
+	elif mat == MAT_WATER:
+		f = 0.5 + 0.3 * t
+	else:
+		f = 0.45 + 0.35 * t
+	return scale_color(base, f)
+
+def dimmed_color_for_material(mat: int, alpha: float):
+	"""Fog-of-war dimmed color.
+	Use per-material scale ranges so walls are much darker than floors when revealed-but-not-visible.
+	alpha: reveal progress 0..1
+	"""
+	base = base_color_for_material(mat)
+
+	def fow_scale_for_material(m: int, a: float) -> float:
+		a = clamp(a, 0.0, 1.0)
+		# Very dark for walls/iron bars
+		if m == MAT_BRICK or m == MAT_IRON:
+			s_min, s_max = 0.10, 0.22
+		elif m == MAT_WATER:
+			s_min, s_max = 0.12, 0.28
+		elif m in (MAT_LAVA, MAT_MARBLE, MAT_WOOD, MAT_SAND, MAT_MOSS, MAT_DIRT, MAT_GRASS):
+			# Non-wall surfaces (treat like floors)
+			s_min, s_max = 0.28, 0.45
+		else:
+			# Default floors (e.g., cobble)
+			s_min, s_max = 0.28, 0.45
+		return s_min + a * (s_max - s_min)
+
+	scale = fow_scale_for_material(mat, alpha)
+	return scale_color(base, scale)
 
 def scale_color(color, factor):
 	f = max(0.0, min(1.0, factor))
@@ -96,6 +172,14 @@ def scale_color(color, factor):
 	g = min(255, int(color[1] * f))
 	b = min(255, int(color[2] * f))
 	return (r, g, b)
+
+def lerp_color(c1, c2, a):
+	a = clamp(a, 0.0, 1.0)
+	return (
+		int(c1[0] + (c2[0] - c1[0]) * a),
+		int(c1[1] + (c2[1] - c1[1]) * a),
+		int(c1[2] + (c2[2] - c1[2]) * a),
+	)
 
 
 def get_term_size():
@@ -111,7 +195,8 @@ def clamp(v, a, b):
 	return max(a, min(b, v))
 
 
-from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon
+from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon, MAT_COBBLE, MAT_BRICK, MAT_DIRT, MAT_MOSS, MAT_SAND, MAT_IRON, MAT_GRASS, MAT_WATER, MAT_LAVA, MAT_MARBLE, MAT_WOOD
+from prefab_loader import load_prefabs
 from parchment_renderer import ParchmentRenderer
 # ---------------------------
 # Save/Load helpers
@@ -134,6 +219,178 @@ def decode_tiles(rows):
 			d.tiles[x][y] = TILE_WALL if ch == '1' else TILE_FLOOR
 	return d
 
+def encode_materials(dungeon: 'Dungeon'):
+	rows = []
+	for y in range(dungeon.h):
+		row = [str(dungeon.materials[x][y]) for x in range(dungeon.w)]
+		rows.append(''.join(row))
+	return rows
+
+def decode_materials(dungeon: 'Dungeon', rows):
+	if not rows:
+		return dungeon
+	for y, row in enumerate(rows):
+		if y >= dungeon.h:
+			break
+		for x, ch in enumerate(row):
+			if x >= dungeon.w:
+				break
+			try:
+				dungeon.materials[x][y] = int(ch)
+			except Exception:
+				pass
+	return dungeon
+
+
+# Reachability and exposed wall helpers
+from collections import deque
+
+def compute_reachable_floors(d: Dungeon, start_x: int, start_y: int):
+	"""Flood fill from the start to find reachable floor tiles (4-neighborhood)."""
+	reachable = set()
+	if not (0 <= start_x < d.w and 0 <= start_y < d.h):
+		return reachable
+	if d.tiles[start_x][start_y] != TILE_FLOOR:
+		# find nearest floor within a small radius
+		for r in range(1, 8):
+			found = False
+			for dx in range(-r, r + 1):
+				for dy in range(-r, r + 1):
+					x, y = start_x + dx, start_y + dy
+					if 0 <= x < d.w and 0 <= y < d.h and d.tiles[x][y] == TILE_FLOOR:
+						start_x, start_y = x, y
+						found = True
+						break
+				if found:
+					break
+			if found:
+				break
+		if d.tiles[start_x][start_y] != TILE_FLOOR:
+			return reachable
+	q = deque()
+	q.append((start_x, start_y))
+	reachable.add((start_x, start_y))
+	while q:
+		x, y = q.popleft()
+		for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+			nx, ny = x + dx, y + dy
+			if 0 <= nx < d.w and 0 <= ny < d.h:
+				if d.tiles[nx][ny] == TILE_FLOOR and (nx, ny) not in reachable:
+					reachable.add((nx, ny))
+					q.append((nx, ny))
+	return reachable
+
+def count_total_exposed_walls(d: Dungeon, reachable_floors=None) -> int:
+	"""Count walls that are exposed to any adjacent floor.
+	If reachable_floors is provided, only count walls exposed to a reachable floor tile.
+	"""
+	total = 0
+	for y in range(d.h):
+		for x in range(d.w):
+			if d.tiles[x][y] != TILE_WALL:
+				continue
+			exposed = False
+			for dy in (-1, 0, 1):
+				for dx in (-1, 0, 1):
+					if dx == 0 and dy == 0:
+						continue
+					nx, ny = x + dx, y + dy
+					if 0 <= nx < d.w and 0 <= ny < d.h and d.tiles[nx][ny] == TILE_FLOOR:
+						if reachable_floors is None or (nx, ny) in reachable_floors:
+							exposed = True
+							break
+				if exposed:
+					break
+			if exposed:
+				total += 1
+	return total
+
+
+def count_total_exposed_bricks(d: Dungeon, reachable_floors=None) -> int:
+	"""Count exposed brick walls (MAT_BRICK) adjacent to at least one reachable floor.
+	If reachable_floors is None, counts exposed to any floor (not recommended for gating).
+	"""
+	total = 0
+	for y in range(d.h):
+		for x in range(d.w):
+			if d.tiles[x][y] != TILE_WALL:
+				continue
+			if d.materials[x][y] != MAT_BRICK:
+				continue
+			exposed = False
+			for dy in (-1, 0, 1):
+				for dx in (-1, 0, 1):
+					if dx == 0 and dy == 0:
+						continue
+					nx, ny = x + dx, y + dy
+					if 0 <= nx < d.w and 0 <= ny < d.h and d.tiles[nx][ny] == TILE_FLOOR:
+						if reachable_floors is None or (nx, ny) in reachable_floors:
+							exposed = True
+							break
+				if exposed:
+					break
+			if exposed:
+				total += 1
+	return total
+
+def count_exposed_bricks_touched(d: Dungeon, touched: set[tuple[int,int]], reachable_floors: set[tuple[int,int]]) -> int:
+	"""Count how many touched bricks are exposed to any reachable floor tile.
+	Safe against overcounting; processes all touched coordinates.
+	"""
+	if not touched:
+		return 0
+	cnt = 0
+	for (bx, by) in touched:
+		if not (0 <= bx < d.w and 0 <= by < d.h):
+			continue
+		if d.tiles[bx][by] != TILE_WALL:
+			continue
+		if d.materials[bx][by] != MAT_BRICK:
+			continue
+		exposed = False
+		for dy in (-1, 0, 1):
+			for dx in (-1, 0, 1):
+				if dx == 0 and dy == 0:
+					continue
+				nx, ny = bx + dx, by + dy
+				if 0 <= nx < d.w and 0 <= ny < d.h and d.tiles[nx][ny] == TILE_FLOOR and (nx, ny) in reachable_floors:
+					exposed = True
+					break
+			if exposed:
+				break
+		if exposed:
+			cnt += 1
+	return cnt
+
+# Count how many brick wall tiles exist in a dungeon
+def count_total_bricks(d: Dungeon) -> int:
+	total = 0
+	for y in range(d.h):
+		for x in range(d.w):
+			try:
+				if d.tiles[x][y] == TILE_WALL and d.materials[x][y] == MAT_BRICK:
+					total += 1
+			except Exception:
+				continue
+	return total
+
+# Count totals for walls and floors
+def count_total_walls(d: Dungeon) -> int:
+	total = 0
+	for y in range(d.h):
+		for x in range(d.w):
+			if d.tiles[x][y] == TILE_WALL:
+				total += 1
+	return total
+
+def count_total_floors(d: Dungeon) -> int:
+	total = 0
+	for y in range(d.h):
+		for x in range(d.w):
+			if d.tiles[x][y] == TILE_FLOOR:
+				total += 1
+	return total
+
 
 def session_to_dict(dungeon: 'Dungeon', explored: set, px: int, py: int, levels=None, current_index=0):
 	if levels is None:
@@ -145,6 +402,7 @@ def session_to_dict(dungeon: 'Dungeon', explored: set, px: int, py: int, levels=
 			'h': dungeon.h,
 			'tiles': encode_tiles(dungeon),
 			'explored': list(sorted(explored)),
+			'materials': encode_materials(dungeon),
 			'player': [px, py],
 		}]
 		current_index = 0
@@ -164,6 +422,7 @@ def dict_to_session(data):
 		idx = max(0, min(idx, len(levels) - 1))
 		cur = levels[idx]
 		d = decode_tiles(cur['tiles'])
+		d = decode_materials(d, cur.get('materials', []))
 		explored_list = cur.get('explored', [])
 		explored = set(tuple(e) for e in explored_list)
 		px, py = cur.get('player', [1, 1])
@@ -397,6 +656,16 @@ def run_terminal():
 
 	fov = FOV(dungeon)
 	explored = set()
+	# Bricks exploration tracking (per-level)
+	def count_total_bricks(d: Dungeon) -> int:
+		total = 0
+		for y in range(d.h):
+			for x in range(d.w):
+				if d.tiles[x][y] == TILE_WALL and d.materials[x][y] == MAT_BRICK:
+					total += 1
+		return total
+	bricks_touched = set()  # set[(x,y)] of brick walls that have been visible at least once
+	total_bricks = count_total_bricks(dungeon)
 
 	hide_cursor()
 	try:
@@ -508,14 +777,49 @@ def run_pygame():
 	fov = FOV(dungeon)
 	explored = set()
 
+	# Brick exploration tracking for pygame mode
+	bricks_touched = set()  # set of (x,y) brick wall tiles lit at least once
+	total_bricks = count_total_bricks(dungeon)
+
+	# Wall/floor exploration tracking for pygame mode
+	walls_touched = set()
+	floors_touched = set()
+	# Floors actually stepped on by the player (for exploration %)
+	floors_stepped = set()
+	# Use reachable floors from player and exposed walls for fair totals
+	reachable = compute_reachable_floors(dungeon, px, py)
+	total_floors = len(reachable)
+	total_walls = count_total_exposed_walls(dungeon, reachable)
+
+	# Debug toggles/state
+	debug_mode = False            # Ctrl+D toggles
+	debug_show_all_visible = False
+	debug_noclip = False
+	light_radius = LIGHT_RADIUS   # dynamic light radius for pygame mode
+
 	# Initialize Pygame
 	pygame.init()
 	screen = pygame.display.set_mode((win_w, win_h))
 	pygame.display.set_caption("ASCII Dungeon (Resizable)")
 	clock = pygame.time.Clock()
 
+	# Simple message log for bottom-left feedback
+	message_log: list[dict] = []  # { 't': float, 'text': str }
+	# One-run milestone tracker for exploration announcements
+	announced_milestones: set[int] = set()
+
+	def add_message(text: str):
+		# Keep log small to avoid memory growth
+		message_log.append({'t': time.time(), 'text': str(text)})
+		if len(message_log) > 200:
+			del message_log[:50]
+
+	# Load prefab library
+	prefabs = load_prefabs(os.path.join(os.path.dirname(__file__), 'prefabs'))
+
 	# Map style setting
 	map_style = (SETTINGS.get('map_style', 'parchment') or 'parchment').lower()
+	render_mode = (SETTINGS.get('render_mode', 'blocks') or 'blocks').lower()  # blocks | ascii
 
 	# Font/glyph cache builder (rebuild on resize)
 	preferred_fonts = ["Courier New", "Consolas", "Lucida Console", "DejaVu Sans Mono", "Monaco"]
@@ -582,6 +886,22 @@ def run_pygame():
 	parchment_static = parchment_renderer.generate(win_w, win_h)
 	render_glyph = build_glyph_cache(font)
 
+	# Prebuild a simple dither pattern to overlay blocks (adds texture)
+	def build_dither_pattern(w, h):
+		pat = pygame.Surface((w, h), pygame.SRCALPHA)
+		pat.fill((0, 0, 0, 0))
+		# 2x2 checkerboard repeated to cell size
+		alpha = 28  # subtle
+		col = (*INK_DARK, alpha)
+		for y in range(0, h, 2):
+			for x in range(0, w, 2):
+				pat.fill(col, (x, y, 1, 1))
+				if x + 1 < w and y + 1 < h:
+					pat.fill(col, (x + 1, y + 1, 1, 1))
+		return pat
+
+	dither_pattern = build_dither_pattern(cell_w, cell_h)
+
 	# Minimap reveal buffers (progress + noise) for watercolor effect
 	mm_reveal = []  # type: list[list[float]]
 	mm_noise = []   # type: list[list[float]]
@@ -615,6 +935,62 @@ def run_pygame():
 
 	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 
+	# One-frame alpha panel drawer in grid coordinates
+	def draw_panel_grid(x_cells: int, y_cells: int, w_cells: int, h_cells: int, color=(0,0,0), alpha: int = 128):
+		if w_cells <= 0 or h_cells <= 0:
+			return
+		px0 = off_x + x_cells * cell_w
+		py0 = off_y + y_cells * cell_h
+		pw = max(0, w_cells * cell_w)
+		ph = max(0, h_cells * cell_h)
+		if pw <= 0 or ph <= 0:
+			return
+		s = pygame.Surface((pw, ph), pygame.SRCALPHA)
+		r, g, b = color
+		alpha = max(0, min(255, int(alpha)))
+		s.fill((r, g, b, alpha))
+		screen.blit(s, (px0, py0))
+
+	def draw_message_log():
+		# Render a small translucent panel with last few messages at bottom-left of the map viewport
+		# Make window 50% taller: from 4 to 6 lines
+		max_lines = 6
+		# width in cells within the map area
+		width_cells = max(10, min(34, map_w - 2))
+		if width_cells <= 0:
+			return
+		lines = [m['text'] for m in message_log[-max_lines:]]
+		height_cells = len(lines) + 2 if lines else 0
+		if height_cells <= 0:
+			return
+		x_cells = UI_COLS + 1
+		y_cells = grid_h - height_cells
+		# Panel background (darker ink, still translucent)
+		darker_bg = scale_color(INK_DARK, 0.6)
+		draw_panel_grid(x_cells, y_cells, width_cells, height_cells, darker_bg, alpha=150)
+		# Title line (light-colored font)
+		draw_text_line(x_cells + 1, y_cells, "Messages"[:width_cells - 2], MARBLE_WHITE, width_cells - 2)
+		# Message lines (light-colored font)
+		for i, text in enumerate(lines):
+			draw_text_line(x_cells + 1, y_cells + 1 + i, ("- " + text)[:width_cells - 2], scale_color(MARBLE_WHITE, 0.92), width_cells - 2)
+
+	# Simple wall-normal helper for directional lighting on walls
+	def wall_normal(d: Dungeon, x: int, y: int):
+		if not d.is_wall(x, y):
+			return 0.0, 0.0
+		nx, ny = 0.0, 0.0
+		for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+			x2, y2 = x + dx, y + dy
+			if 0 <= x2 < d.w and 0 <= y2 < d.h and not d.is_wall(x2, y2):
+				# normal points toward open space
+				nx += dx
+				ny += dy
+		# normalize
+		length = math.hypot(nx, ny)
+		if length > 1e-6:
+			return nx / length, ny / length
+		return 0.0, 0.0
+
 	def draw_minimap(surface, dungeon, explored_set, visible_set, px, py):
 		mm = SETTINGS.get('minimap', {}) or {}
 		if not mm.get('enabled', True):
@@ -635,15 +1011,50 @@ def run_pygame():
 		else:  # top-right
 			ox, oy = win_w - w_px - margin, margin
 
-		# Draw background frame (optional)
-		pygame.draw.rect(surface, PARCHMENT_BG, (ox - 2, oy - 2, w_px + 4, h_px + 4))
-		pygame.draw.rect(surface, scale_color(INK_DARK, 0.7), (ox - 2, oy - 2, w_px + 4, h_px + 4), 1)
+		# Fancy minimap frame: base fill + outer shadow + inner highlight + decorative studs
+		frame_x = ox - 2
+		frame_y = oy - 2
+		frame_w = w_px + 4
+		frame_h = h_px + 4
+		outer = scale_color(INK_DARK, 0.6)
+		inner = MARBLE_WHITE
+		base = PARCHMENT_BG
+		# Base fill
+		pygame.draw.rect(surface, base, (frame_x, frame_y, frame_w, frame_h))
+		# Outer shadow line (2px)
+		pygame.draw.rect(surface, outer, (frame_x, frame_y, frame_w, frame_h), 2)
+		# Inner highlight line (1px just inside)
+		pygame.draw.rect(surface, inner, (frame_x + 2, frame_y + 2, frame_w - 4, frame_h - 4), 1)
+		# Decorative studs every 4 tiles along vertical edges
+		stud_w = max(2, min(4, t - 1))
+		stud_h = max(2, min(4, t - 1))
+		left_x = frame_x + 3
+		right_x = frame_x + frame_w - 3 - stud_w
+		for ty in range(0, dungeon.h, 4):
+			sy_px = oy + ty * t + (t - stud_h) // 2
+			if sy_px < frame_y + 2 or sy_px + stud_h > frame_y + frame_h - 2:
+				continue
+			pygame.draw.rect(surface, inner, (left_x, sy_px, stud_w, stud_h))
+			pygame.draw.rect(surface, inner, (right_x, sy_px, stud_w, stud_h))
 
-		# Colors for minimap
-		vis_floor = scale_color(FLOOR_BROWN, 0.9)
-		vis_wall = scale_color(WALL_BROWN, 1.0)
-		exp_floor = scale_color(FLOOR_BROWN, 0.5)
-		exp_wall = scale_color(WALL_BROWN, 0.6)
+		# Colors for minimap (use materials). Match FoW separation used in world.
+		def mini_color(x, y, visible_now, alpha_reveal):
+			if 0 <= x < dungeon.w and 0 <= y < dungeon.h:
+				m = dungeon.materials[x][y]
+				base = base_color_for_material(m)
+				if visible_now:
+					return base
+				# FoW: darker walls vs lighter floors
+				def fow_scale_for_material(m2: int, a: float) -> float:
+					a = clamp(a, 0.0, 1.0)
+					if m2 == MAT_BRICK or m2 == MAT_IRON:
+						s_min, s_max = 0.12, 0.24
+					else:
+						s_min, s_max = 0.30, 0.50
+					return s_min + a * (s_max - s_min)
+				s = fow_scale_for_material(m, alpha_reveal)
+				return scale_color(base, s)
+			return INK_DARK
 
 		def lerp(c1, c2, a):
 			ar = clamp(a, 0.0, 1.0)
@@ -658,15 +1069,11 @@ def run_pygame():
 			for x in range(dungeon.w):
 				rect = (ox + x * t, oy + y * t, t, t)
 				if (x, y) in explored_set or (x, y) in visible_set:
-					# choose target color based on current visibility
-					if (x, y) in visible_set:
-						c_target = vis_wall if dungeon.tiles[x][y] == TILE_WALL else vis_floor
-					else:
-						c_target = exp_wall if dungeon.tiles[x][y] == TILE_WALL else exp_floor
 					# watercolor-like reveal from parchment using per-tile progress and noise
 					prog = mm_reveal[x][y] if 0 <= x < dungeon.w and 0 <= y < dungeon.h else 1.0
 					noi = mm_noise[x][y] if 0 <= x < dungeon.w and 0 <= y < dungeon.h else 0.0
 					alpha = clamp(pow(clamp(prog + noi, 0.0, 1.0), 1.8), 0.0, 1.0)
+					c_target = mini_color(x, y, (x, y) in visible_set, alpha)
 					c = lerp(PARCHMENT_BG, c_target, alpha)
 					surface.fill(c, rect)
 				else:
@@ -695,6 +1102,53 @@ def run_pygame():
 		gy = off_y + cell_y * cell_h + (cell_h - surf.get_height()) // 2
 		screen.blit(surf, (gx, gy))
 
+	def draw_block_at(cell_x, cell_y, color, inset=0, with_dither=True):
+		# Fill a solid rectangle for the cell, optional inset for borders
+		px = off_x + cell_x * cell_w + inset
+		py = off_y + cell_y * cell_h + inset
+		pw = max(0, cell_w - inset * 2)
+		ph = max(0, cell_h - inset * 2)
+		if pw <= 0 or ph <= 0:
+			return
+		screen.fill(color, (px, py, pw, ph))
+		if with_dither and dither_pattern is not None:
+			# Overlay subtle pattern for texture
+			# Use a clipped blit to match inset
+			src = dither_pattern.subsurface((inset, inset, pw, ph)) if (inset > 0 and inset * 2 < cell_w and inset * 2 < cell_h) else dither_pattern
+			screen.blit(src, (px, py))
+
+	def draw_overlay_at(cell_x, cell_y, color, alpha, inset=0):
+		# Alpha-blended rectangle on top of parchment/world for subtle fades
+		px = off_x + cell_x * cell_w + inset
+		py = off_y + cell_y * cell_h + inset
+		pw = max(0, cell_w - inset * 2)
+		ph = max(0, cell_h - inset * 2)
+		if pw <= 0 or ph <= 0:
+			return
+		alpha = clamp(alpha, 0.0, 1.0)
+		if alpha <= 0.0:
+			return
+		s = pygame.Surface((pw, ph), pygame.SRCALPHA)
+		r, g, b = color
+		s.fill((r, g, b, int(255 * alpha)))
+		screen.blit(s, (px, py))
+
+	def draw_cell_px_rect(cell_x, cell_y, rx, ry, rw, rh, color, alpha=None):
+		# Draw a pixel-precise rectangle inside a cell
+		px = off_x + cell_x * cell_w + int(rx)
+		py = off_y + cell_y * cell_h + int(ry)
+		rw = int(max(0, rw))
+		rh = int(max(0, rh))
+		if rw <= 0 or rh <= 0:
+			return
+		if alpha is None:
+			pygame.draw.rect(screen, color, (px, py, rw, rh))
+		else:
+			s = pygame.Surface((rw, rh), pygame.SRCALPHA)
+			r, g, b = color
+			s.fill((r, g, b, int(255 * clamp(alpha, 0.0, 1.0))))
+			screen.blit(s, (px, py))
+
 	def draw_text_line(cell_x, cell_y, text, color=(180, 180, 180), max_len=None):
 		if max_len is None:
 			max_len = len(text)
@@ -702,11 +1156,22 @@ def run_pygame():
 			draw_char_at(cell_x + i, cell_y, ch, color)
 
 	# Session state: multi-level support
-	levels = []  # list of dicts: { 'dungeon': Dungeon, 'explored': set[(x,y)], 'player': (px,py) }
+	levels = []  # list of dicts: dungeon/explored/player + touched/totals for bricks, walls, floors
 	current_level_index = 0
 
 	def snapshot_current():
-		return {'dungeon': dungeon, 'explored': set(explored), 'player': (px, py)}
+		return {
+			'dungeon': dungeon,
+			'explored': set(explored),
+			'player': (px, py),
+			'bricks_touched': set(bricks_touched),
+			'total_bricks': int(total_bricks),
+			'walls_touched': set(walls_touched),
+			'floors_touched': set(floors_touched),
+			'floors_stepped': set(floors_stepped),
+			'total_walls': int(total_walls),
+			'total_floors': int(total_floors),
+		}
 
 	def collect_levels_for_save(level_list):
 		out = []
@@ -714,18 +1179,42 @@ def run_pygame():
 			d = lvl['dungeon']
 			exp = lvl['explored']
 			pxx, pyy = lvl['player']
+			bt = lvl.get('bricks_touched', set())
+			tb = lvl.get('total_bricks')
+			if tb is None:
+				tb = count_total_bricks(d)
+			wt = lvl.get('walls_touched', set())
+			ft = lvl.get('floors_touched', set())
+			fs = lvl.get('floors_stepped', set())
+			tw = lvl.get('total_walls')
+			tf = lvl.get('total_floors')
+			if tw is None or tf is None:
+				# compute fair totals based on reachability from saved player pos
+				pf_x, pf_y = int(pxx), int(pyy)
+				rf = compute_reachable_floors(d, pf_x, pf_y)
+				tf = len(rf)
+				tw = count_total_exposed_walls(d, rf)
 			out.append({
 				'w': d.w,
 				'h': d.h,
 				'tiles': encode_tiles(d),
+				'materials': encode_materials(d),
 				'explored': list(sorted(exp)),
 				'player': [pxx, pyy],
+				'bricks_touched': list(sorted(bt)),
+				'total_bricks': int(tb),
+				'walls_touched': list(sorted(wt)),
+				'floors_touched': list(sorted(ft)),
+				'floors_stepped': list(sorted(fs)),
+				'total_walls': int(tw),
+				'total_floors': int(tf),
 			})
 		return out
 
 	def push_new_level():
 		nonlocal dungeon, fov, explored, px, py, current_level_index
-		nonlocal mm_reveal, mm_noise
+		nonlocal mm_reveal, mm_noise, wr_reveal, wr_noise
+		nonlocal bricks_touched, total_bricks, walls_touched, floors_touched, floors_stepped, total_walls, total_floors
 		# Save snapshot of current first
 		if levels:
 			levels[current_level_index] = snapshot_current()
@@ -737,25 +1226,65 @@ def run_pygame():
 			pxn, pyn = nd.rooms[0].center()
 		else:
 			pxn, pyn = 1, 1
+		# switch to new level
 		dungeon = nd
 		fov = FOV(dungeon)
 		explored = set()
 		px, py = pxn, pyn
-		levels.append({'dungeon': dungeon, 'explored': explored, 'player': (px, py)})
-		# rebuild minimap buffers for new level
+		bricks_touched = set()
+		total_bricks = count_total_bricks(dungeon)
+		walls_touched = set()
+		floors_touched = set()
+		floors_stepped = set()
+		# fair totals for new level
+		rf = compute_reachable_floors(dungeon, px, py)
+		total_floors = len(rf)
+		total_walls = count_total_exposed_walls(dungeon, rf)
+		levels.append({
+			'dungeon': dungeon,
+			'explored': explored,
+			'player': (px, py),
+			'bricks_touched': bricks_touched,
+			'total_bricks': total_bricks,
+			'walls_touched': walls_touched,
+			'floors_touched': floors_touched,
+			'floors_stepped': floors_stepped,
+			'total_walls': total_walls,
+			'total_floors': total_floors,
+		})
+		# rebuild minimap/world buffers for new level
 		mm_reveal, mm_noise = build_minimap_buffers(dungeon)
-		# rebuild world FoW buffers for new level
 		wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 		current_level_index = len(levels) - 1
+		add_message("New level created.")
 
 	# Initialize with first level
 	px, py = (dungeon.rooms[0].center() if dungeon.rooms else (1, 1))
-	levels.append({'dungeon': dungeon, 'explored': explored, 'player': (px, py)})
+	levels.append({
+		'dungeon': dungeon,
+		'explored': explored,
+		'player': (px, py),
+		'bricks_touched': bricks_touched,
+		'total_bricks': total_bricks,
+		'walls_touched': walls_touched,
+		'floors_touched': floors_touched,
+		'floors_stepped': floors_stepped,
+		'total_walls': total_walls,
+		'total_floors': total_floors,
+	})
 	# build minimap buffers for initial level
 	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
 	# build world FoW buffers for initial level
 	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 	current_level_index = 0
+
+	# Mark starting tile as stepped if it's a floor
+	if 0 <= px < dungeon.w and 0 <= py < dungeon.h and dungeon.tiles[px][py] == TILE_FLOOR:
+		floors_stepped.add((px, py))
+		levels[current_level_index]['floors_stepped'] = floors_stepped
+
+	# Welcome message
+	add_message("Welcome to the dungeon.")
 
 	# Menu state
 	menu_open = False
@@ -850,6 +1379,56 @@ def run_pygame():
 			if event.type == pygame.QUIT:
 				running = False
 			elif event.type == pygame.KEYDOWN:
+				# Debug mode toggle: Ctrl + D
+				mods = pygame.key.get_mods()
+				if (mods & pygame.KMOD_CTRL) and event.key == pygame.K_d:
+					debug_mode = not debug_mode
+					continue
+
+				# Debug commands (only when debug mode enabled and menu not open)
+				if debug_mode and not menu_open:
+					if event.key == pygame.K_F1:
+						# Toggle: show entire map as visible (override FOV)
+						debug_show_all_visible = not debug_show_all_visible
+						continue
+					if event.key == pygame.K_F2:
+						# Action: reveal all tiles (FoW)
+						explored = set((x, y) for x in range(dungeon.w) for y in range(dungeon.h))
+						# push reveal progress to done
+						for x in range(dungeon.w):
+							for y in range(dungeon.h):
+								mm_reveal[x][y] = 1.0
+								wr_reveal[x][y] = 1.0
+						# mark all current walls/floors/brick as touched
+						bricks_touched = set((x, y) for x in range(dungeon.w) for y in range(dungeon.h)
+										     if dungeon.tiles[x][y] == TILE_WALL and dungeon.materials[x][y] == MAT_BRICK)
+						walls_touched = set((x, y) for x in range(dungeon.w) for y in range(dungeon.h)
+									    if dungeon.tiles[x][y] == TILE_WALL)
+						floors_touched = set((x, y) for x in range(dungeon.w) for y in range(dungeon.h)
+								    if dungeon.tiles[x][y] == TILE_FLOOR)
+						# For debug reveal, consider all reachable floors as stepped
+						reachable = compute_reachable_floors(dungeon, px, py)
+						floors_stepped = set(reachable)
+						# keep level snapshot in sync if present
+						if levels and 0 <= current_level_index < len(levels):
+							levels[current_level_index]['bricks_touched'] = bricks_touched
+							levels[current_level_index]['walls_touched'] = walls_touched
+							levels[current_level_index]['floors_touched'] = floors_touched
+							levels[current_level_index]['floors_stepped'] = floors_stepped
+						continue
+					if event.key == pygame.K_F3:
+						# Toggle: noclip movement (ignore walls)
+						debug_noclip = not debug_noclip
+						continue
+					if event.key == pygame.K_F4:
+						# Decrease light radius (min 1)
+						light_radius = max(1, int(light_radius) - 1)
+						continue
+					if event.key == pygame.K_F5:
+						# Increase light radius (max reasonable cap)
+						light_radius = min(20, int(light_radius) + 1)
+						continue
+
 				if event.key == pygame.K_ESCAPE:
 					if menu_open:
 						if menu_mode in ('save', 'load'):
@@ -871,6 +1450,46 @@ def run_pygame():
 				# Developer hotkey: generate new level 'N'
 				if event.key == pygame.K_n and not menu_open:
 					push_new_level()
+					continue
+
+				# Developer hotkey: stamp a prefab near player 'P'
+				if event.key == pygame.K_p and not menu_open:
+					if prefabs:
+						# choose a random prefab from the loaded library
+						pf = random.choice(list(prefabs.values()))
+						# stamp top-left anchored near player
+						x0 = max(0, px - pf.width // 2)
+						y0 = max(0, py - pf.height // 2)
+						dungeon.stamp_prefab(x0, y0, pf.cells, pf.legend)
+						# refresh FOV
+						fov = FOV(dungeon)
+						# update totals (dungeon changed)
+						total_bricks = count_total_bricks(dungeon)
+						reachable = compute_reachable_floors(dungeon, px, py)
+						total_floors = len(reachable)
+						total_walls = count_total_exposed_walls(dungeon, reachable)
+						# reconcile touched sets against current dungeon state
+						bricks_touched = set((x, y) for (x, y) in bricks_touched
+							if 0 <= x < dungeon.w and 0 <= y < dungeon.h and
+							   dungeon.tiles[x][y] == TILE_WALL and dungeon.materials[x][y] == MAT_BRICK)
+						walls_touched = set((x, y) for (x, y) in walls_touched
+							if 0 <= x < dungeon.w and 0 <= y < dungeon.h and any(
+								0 <= x+dx < dungeon.w and 0 <= y+dy < dungeon.h and dungeon.tiles[x+dx][y+dy] == TILE_FLOOR and ((x+dx, y+dy) in reachable)
+								for dx in (-1,0,1) for dy in (-1,0,1) if not (dx==0 and dy==0)
+							))
+						floors_touched = set((x, y) for (x, y) in floors_touched
+							if 0 <= x < dungeon.w and 0 <= y < dungeon.h and dungeon.tiles[x][y] == TILE_FLOOR)
+						if 0 <= current_level_index < len(levels):
+							levels[current_level_index]['total_bricks'] = total_bricks
+							levels[current_level_index]['total_walls'] = total_walls
+							levels[current_level_index]['total_floors'] = total_floors
+							levels[current_level_index]['bricks_touched'] = bricks_touched
+							levels[current_level_index]['walls_touched'] = walls_touched
+							levels[current_level_index]['floors_touched'] = floors_touched
+							# Reconcile stepped floors to valid floors
+							floors_stepped = set((x, y) for (x, y) in floors_stepped
+												if 0 <= x < dungeon.w and 0 <= y < dungeon.h and dungeon.tiles[x][y] == TILE_FLOOR)
+							levels[current_level_index]['floors_stepped'] = floors_stepped
 					continue
 
 				if menu_open:
@@ -923,6 +1542,7 @@ def run_pygame():
 													levels=collect_levels_for_save(levels),
 													current_index=current_level_index)
 								menu_mode = 'main'
+								add_message(f"Game saved as '{nm}'.")
 						else:
 							ch = event.unicode
 							if ch and re.match(r"[A-Za-z0-9_-]", ch):
@@ -944,9 +1564,29 @@ def run_pygame():
 								new_levels = []
 								for lvl in levels_data:
 									dl = decode_tiles(lvl['tiles'])
+									dl = decode_materials(dl, lvl.get('materials', []))
 									expl = set(tuple(e) for e in lvl.get('explored', []))
 									pl = tuple(lvl.get('player', [1, 1]))
-									new_levels.append({'dungeon': dl, 'explored': expl, 'player': (int(pl[0]), int(pl[1]))})
+									# Restore metrics if present
+									bt_list = [tuple(pt) for pt in lvl.get('bricks_touched', [])]
+									tb_val = int(lvl.get('total_bricks', count_total_bricks(dl)))
+									wt_list = [tuple(pt) for pt in lvl.get('walls_touched', [])]
+									ft_list = [tuple(pt) for pt in lvl.get('floors_touched', [])]
+									fs_list = [tuple(pt) for pt in lvl.get('floors_stepped', [])]
+									tw_val = int(lvl.get('total_walls', count_total_walls(dl)))
+									tf_val = int(lvl.get('total_floors', count_total_floors(dl)))
+									new_levels.append({
+										'dungeon': dl,
+										'explored': expl,
+										'player': (int(pl[0]), int(pl[1])),
+										'bricks_touched': set(bt_list),
+										'total_bricks': tb_val,
+										'walls_touched': set(wt_list),
+										'floors_touched': set(ft_list),
+										'floors_stepped': set(fs_list),
+										'total_walls': tw_val,
+										'total_floors': tf_val,
+									})
 								if not new_levels:
 									raise ValueError('Empty save')
 								levels = new_levels
@@ -955,10 +1595,20 @@ def run_pygame():
 								dungeon = levels[current_level_index]['dungeon']
 								explored = levels[current_level_index]['explored']
 								px, py = levels[current_level_index]['player']
+								bricks_touched = levels[current_level_index].get('bricks_touched', set())
+								total_bricks = levels[current_level_index].get('total_bricks', count_total_bricks(dungeon))
+								# Restore combined metrics
+								walls_touched = levels[current_level_index].get('walls_touched', set())
+								floors_touched = levels[current_level_index].get('floors_touched', set())
+								floors_stepped = levels[current_level_index].get('floors_stepped', set())
+								total_walls = levels[current_level_index].get('total_walls', count_total_walls(dungeon))
+								total_floors = levels[current_level_index].get('total_floors', count_total_floors(dungeon))
 								fov = FOV(dungeon)
-								# rebuild minimap buffers for loaded level
+								# rebuild minimap/world buffers for loaded level
 								mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+								wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 								menu_mode = 'main'
+								add_message(f"Loaded save '{nm}'.")
 							except Exception as e:
 								# simple error display in title line
 								pass
@@ -975,11 +1625,21 @@ def run_pygame():
 					dx = 1
 				if dx != 0 or dy != 0:
 					nx, ny = px + dx, py + dy
-					if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h and not dungeon.is_wall(nx, ny):
-						px, py = nx, ny
+					if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h:
+						if debug_noclip or not dungeon.is_wall(nx, ny):
+							px, py = nx, ny
+							# Track floors stepped-on
+							if dungeon.tiles[px][py] == TILE_FLOOR and (px, py) not in floors_stepped:
+								floors_stepped.add((px, py))
+								if levels and 0 <= current_level_index < len(levels):
+									levels[current_level_index]['floors_stepped'] = floors_stepped
 
-		# Update visibility
-		visible = fov.compute(px, py, LIGHT_RADIUS)
+		# Update visibility after input
+		if debug_show_all_visible:
+			visible = {(x, y): 0.0 for x in range(dungeon.w) for y in range(dungeon.h)}
+		else:
+			visible = fov.compute(px, py, light_radius)
+
 		# Animate minimap reveal
 		dt = clock.get_time() / 1000.0
 		reveal_rate = 2.0
@@ -990,6 +1650,9 @@ def run_pygame():
 				# Animate world FoW reveal similarly
 				if wr_reveal[ex][ey] < 1.0:
 					wr_reveal[ex][ey] = clamp(wr_reveal[ex][ey] + dt * reveal_rate, 0.0, 1.0)
+
+		# Compute reachable floors once per frame for exploration logic
+		reachable_this_frame = compute_reachable_floors(dungeon, px, py)
 
 		# Render
 		# Static parchment background (no spiral/animation)
@@ -1003,11 +1666,35 @@ def run_pygame():
 		cam_x = px - view_w // 2
 		cam_y = py - view_h // 2
 
-		# Do not paint an opaque viewport background; let parchment show under floors
+	# Do not paint an opaque viewport background; let parchment show under floors
 
-		# Draw UI border across the full window height (in grid rows)
-		for sy in range(view_h):
-			draw_char_at(BORDER_COL, sy, WALL_CH, scale_color(WALL_LIGHT, 0.9))
+		# Draw UI border across the full window height
+		if render_mode == 'blocks':
+			border_base = scale_color(WALL_LIGHT, 0.95)
+			border_shadow = scale_color(INK_DARK, 0.6)
+			border_high = MARBLE_WHITE if 'MARBLE_WHITE' in globals() else (220, 220, 228)
+			for sy in range(view_h):
+				cx = BORDER_COL
+				cy = sy
+				# Base fill with subtle dither texture
+				draw_block_at(cx, cy, border_base, inset=0, with_dither=True)
+				# Right-side dark separating line (toward map)
+				draw_cell_px_rect(cx, cy, cell_w - 1, 0, 1, cell_h, border_shadow)
+				# Left-side highlight edge (toward UI)
+				draw_cell_px_rect(cx, cy, 0, 0, 1, cell_h, border_high)
+				# Decorative studs every 4 rows
+				if (sy % 4) == 0:
+					stud_w = max(2, cell_w // 5)
+					stud_h = max(2, cell_h // 5)
+					sx = (cell_w - stud_w) // 2
+					sy_px = (cell_h - stud_h) // 2
+					# Outer light stud with inner dark dot
+					draw_cell_px_rect(cx, cy, sx, sy_px, stud_w, stud_h, border_high, alpha=0.9)
+					inner = max(1, min(stud_w, stud_h) // 2)
+					draw_cell_px_rect(cx, cy, sx + (stud_w - inner)//2, sy_px + (stud_h - inner)//2, inner, inner, border_shadow, alpha=0.9)
+		else:
+			for sy in range(view_h):
+				draw_char_at(BORDER_COL, sy, WALL_CH, scale_color(WALL_LIGHT, 0.9))
 
 		# Draw tiles in viewport window
 		for sy in range(view_h):
@@ -1016,82 +1703,156 @@ def run_pygame():
 				wx = cam_x + sx
 				draw_ch = ' '
 				color = INK_DARK
+				block_color = None
 				if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h:
 					# In-bounds tiles
 					tile = dungeon.tiles[wx][wy]
+					mat = dungeon.materials[wx][wy]
 					world_pos = (wx, wy)
 					if world_pos in visible:
 						explored.add(world_pos)
+						d = visible[world_pos]
+						tval = 1.0 - (d / max(1e-6, light_radius))
+						tval = clamp(tval, 0.0, 1.0)
+						# Base lit color
+						color = lit_color_for_material(mat, tval)
+						# Track exploration metrics when a tile becomes visible
+						# - Brick-specific subset
+						if tile == TILE_WALL and mat == MAT_BRICK:
+							bricks_touched.add((wx, wy))
+						# - Combined wall/floor sets
 						if tile == TILE_WALL:
-							d = visible[world_pos]
-							t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
-							t = clamp(t, 0.0, 1.0)
-							if map_style == 'dark':
-								# Dark style walls: darker brown
-								base_col = FLOOR_BROWN
-								bw = 0.7 + 0.3 * t
-								color = scale_color(base_col, bw)
-							else:
-								bw = 0.6 + 0.4 * t
-								color = scale_color(WALL_LIGHT, bw)
-							draw_ch = WALL_CH
+							# Only count walls that border a reachable floor tile
+							for dx in (-1,0,1):
+								for dy in (-1,0,1):
+									if dx==0 and dy==0:
+										continue
+									nx, ny = wx+dx, wy+dy
+									if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h and dungeon.tiles[nx][ny] == TILE_FLOOR and (nx, ny) in reachable_this_frame:
+										walls_touched.add((wx, wy))
+										break
 						else:
-							d = visible[world_pos]
-							t = 1.0 - (d / max(1e-6, LIGHT_RADIUS))
-							t = clamp(t, 0.0, 1.0)
-							bf = 0.45 + 0.35 * t
-							# Floors drawn as blank (space) so parchment shows through in all styles
-							color = scale_color(FLOOR_MED, bf)
-							draw_ch = ' '
+							floors_touched.add((wx, wy))
+						# Directional boost for walls: Lambertian with normal toward open space
+						if tile == TILE_WALL:
+							wnx, wny = wall_normal(dungeon, wx, wy)
+							# Light vector from tile to player (toward the light source)
+							lx = px - wx
+							ly = py - wy
+							llen = math.hypot(lx, ly)
+							if llen > 1e-6:
+								lx /= llen
+								ly /= llen
+							# Only apply if we have a meaningful normal
+							ndotl = max(0.0, wnx * lx + wny * ly)
+							if ndotl > 0.0:
+								boost = 0.25 * ndotl  # subtle boost
+								color = scale_color(color, 1.0 + boost)
+						draw_ch = WALL_CH if tile == TILE_WALL else ' '
+						block_color = color
 					# Explored but not currently visible: dimmed FoW rendering
 					elif (wx, wy) in explored:
 						prog = wr_reveal[wx][wy]
 						noi = wr_noise[wx][wy]
 						alpha = clamp(pow(clamp(prog + noi, 0.0, 1.0), 1.8), 0.0, 1.0)
-						if tile == TILE_WALL:
-							if map_style == 'dark':
-								base_col = scale_color(FLOOR_BROWN, 0.7)  # dim darker walls
-							else:
-								base_col = scale_color(WALL_LIGHT, 0.55)  # dim walls
-						else:
-							base_col = scale_color(FLOOR_MED, 0.28)   # dim floors
-						# Fade glyph in based on alpha
-						color = scale_color(base_col, alpha)
+						color = dimmed_color_for_material(mat, alpha)
 						draw_ch = WALL_CH if tile == TILE_WALL else ' '
+						block_color = color
 				# else: out-of-bounds rendering
 				else:
-					# Do not draw anything out-of-bounds; leave background visible
+					# Leave parchment visible; draw nothing out-of-bounds
 					draw_ch = ' '
 
-				if draw_ch != ' ':
-					surf = render_glyph(draw_ch, color)
-					gx = off_x + (UI_COLS + 1 + sx) * cell_w + (cell_w - surf.get_width()) // 2
-					gy = off_y + sy * cell_h + (cell_h - surf.get_height()) // 2
-					screen.blit(surf, (gx, gy))
+				# Render according to mode
+				if render_mode == 'blocks':
+					if block_color is not None:
+						# Fill the map cell rectangle (offset by UI columns)
+						cell_x = UI_COLS + 1 + sx
+						cell_y = sy
+						# Slight inset for crisp borders
+						inset = 1
+						draw_block_at(cell_x, cell_y, block_color, inset=inset, with_dither=True)
+				else:
+					if draw_ch != ' ':
+						surf = render_glyph(draw_ch, color)
+						gx = off_x + (UI_COLS + 1 + sx) * cell_w + (cell_w - surf.get_width()) // 2
+						gy = off_y + sy * cell_h + (cell_h - surf.get_height()) // 2
+						screen.blit(surf, (gx, gy))
 
-		# Draw player at the center of the viewport (screen), not moving
-		# Always draw player at the center of the viewport
+		# Draw player at the center of the viewport
 		pcx = clamp(view_w // 2, 0, view_w - 1)
 		pcy = clamp(view_h // 2, 0, view_h - 1)
-		surf = render_glyph(PLAYER_CH, PLAYER_GREEN)
-		gx = off_x + (UI_COLS + 1 + pcx) * cell_w + (cell_w - surf.get_width()) // 2
-		gy = off_y + pcy * cell_h + (cell_h - surf.get_height()) // 2
-		screen.blit(surf, (gx, gy))
+		if render_mode == 'blocks':
+			# Player as a colored block with a thin outline
+			cell_x = UI_COLS + 1 + pcx
+			cell_y = pcy
+			inset = 1
+			draw_block_at(cell_x, cell_y, PLAYER_GREEN, inset=inset, with_dither=False)
+			# Outline
+			px0 = off_x + cell_x * cell_w + inset
+			py0 = off_y + cell_y * cell_h + inset
+			pw = cell_w - inset * 2
+			ph = cell_h - inset * 2
+			pygame.draw.rect(screen, INK_DARK, (px0, py0, pw, ph), width=1)
+		else:
+			surf = render_glyph(PLAYER_CH, PLAYER_GREEN)
+			gx = off_x + (UI_COLS + 1 + pcx) * cell_w + (cell_w - surf.get_width()) // 2
+			gy = off_y + pcy * cell_h + (cell_h - surf.get_height()) // 2
+			screen.blit(surf, (gx, gy))
 
 		# HUD (optional)
 		if SETTINGS.get('hud_text', True) and not menu_open:
-			hud_text = f"WASD move, Esc/Q quit | {dungeon.w}x{dungeon.h} | r={LIGHT_RADIUS}"
+			hud_text = f"WASD move, Esc/Q quit | {dungeon.w}x{dungeon.h} | r={light_radius}"
 			hud_surf = font.render(hud_text, False, scale_color(WALL_LIGHT, 1.0))
 			screen.blit(hud_surf, (4, win_h - hud_surf.get_height() - 4))
+
+		# Bottom-left feedback area (message log) over the map
+		if not menu_open:
+			draw_message_log()
 
 		# UI panel content (draw after world so it overlays if needed)
 		# Simple sample stats
 		ui_color = scale_color(WALL_LIGHT, 0.95)
 		title = "== STATUS =="
 		draw_text_line(0, 0, title[:UI_COLS], scale_color(WALL_LIGHT, 1.0), UI_COLS)
-		draw_text_line(0, 2, f"Pos: {px:02d},{py:02d}"[:UI_COLS], ui_color, UI_COLS)
+		draw_text_line(0, 2, f"Pos:{px:02d},{py:02d}"[:UI_COLS], ui_color, UI_COLS)
 		draw_text_line(0, 3, f"Size:{dungeon.w:02d}x{dungeon.h:02d}"[:UI_COLS], ui_color, UI_COLS)
-		draw_text_line(0, 4, f"Light:{LIGHT_RADIUS}"[:UI_COLS], ui_color, UI_COLS)
+		draw_text_line(0, 4, f"Light:{light_radius:02d}"[:UI_COLS], ui_color, UI_COLS)
+		# Exploration percent: floors stepped + exposed brick walls illuminated
+		# Compute exposed bricks total (adjacent to reachable floors) each frame
+		exposed_bricks_total = count_total_exposed_bricks(dungeon, reachable_this_frame)
+		floors_total = max(0, total_floors or 0)
+		combined_total = max(1, floors_total + exposed_bricks_total)
+		# Count exposed bricks that have actually been illuminated (in bricks_touched)
+		exposed_bricks_touched = count_exposed_bricks_touched(dungeon, bricks_touched, reachable_this_frame)
+		combined_touched = len(floors_stepped)
+		# Floors stepped cannot exceed floors_total; cap now to avoid overshoot if reconciliation lags in edge cases
+		combined_touched = min(combined_touched, floors_total)
+		combined_touched += min(exposed_bricks_touched, exposed_bricks_total)
+		ratio = 0.0 if combined_total <= 0 else (combined_touched / combined_total)
+		ratio = max(0.0, min(1.0, ratio))
+		pct = int(round(ratio * 100))
+		# Safety: if some exposed bricks not yet touched but rounding gave 100%, clamp to 99
+		if exposed_bricks_touched < exposed_bricks_total and pct == 100:
+			pct = 99
+		draw_text_line(0, 5, f"Explored:{pct:3d}%"[:UI_COLS], ui_color, UI_COLS)
+
+		# Milestone messages for combined exploration
+		for threshold in (25, 50, 75, 100):
+			if pct >= threshold and threshold not in announced_milestones:
+				add_message(f"Exploration {threshold}% uncovered.")
+				announced_milestones.add(threshold)
+
+		# Debug UI pane additions
+		if debug_mode:
+			draw_text_line(0, 6, "== DEBUG =="[:UI_COLS], scale_color(WALL_LIGHT, 1.0), UI_COLS)
+			draw_text_line(0, 7, f"F1 Vis:{'On' if debug_show_all_visible else 'Off'}"[:UI_COLS], ui_color, UI_COLS)
+			draw_text_line(0, 8, "F2 Reveal"[:UI_COLS], ui_color, UI_COLS)
+			draw_text_line(0, 9, f"F3 Clip:{'Off' if debug_noclip else 'On'}"[:UI_COLS], ui_color, UI_COLS)
+			draw_text_line(0,10, "F4/F5 Lr"[:UI_COLS], ui_color, UI_COLS)
+			draw_text_line(0,11, "N NewLvl"[:UI_COLS], ui_color, UI_COLS)
+			draw_text_line(0,12, "P Stamp"[:UI_COLS], ui_color, UI_COLS)
+			draw_text_line(0,13, "Ctrl+D dbg"[:UI_COLS], ui_color, UI_COLS)
 
 		# Minimap (after UI/world)
 		if not menu_open:

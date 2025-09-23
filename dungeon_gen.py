@@ -36,6 +36,19 @@ class Rect:
 TILE_FLOOR = 0
 TILE_WALL = 1
 
+# Material identifiers (render-agnostic)
+MAT_COBBLE = 0   # stone floor / cobblestone
+MAT_BRICK = 1    # brick wall
+MAT_DIRT = 2     # dirt/earth (optional usage)
+MAT_MOSS = 3     # mossy floor/stone
+MAT_SAND = 4     # sand/sandstone
+MAT_IRON = 5     # iron bars/metal
+MAT_GRASS = 6    # grass
+MAT_WATER = 7    # water
+MAT_LAVA = 8     # lava
+MAT_MARBLE = 9   # marble
+MAT_WOOD = 10    # wood
+
 
 class Dungeon:
     def __init__(self, w: int, h: int):
@@ -43,6 +56,8 @@ class Dungeon:
         self.h = h
         # Initialize all walls (tile types, not display chars)
         self.tiles: List[List[int]] = [[TILE_WALL for _ in range(h)] for _ in range(w)]
+        # Materials grid, default to brick (matches initial walls)
+        self.materials: List[List[int]] = [[MAT_BRICK for _ in range(h)] for _ in range(w)]
         self.rooms: List[Rect] = []
 
     def carve_room(self, room: Rect):
@@ -50,16 +65,19 @@ class Dungeon:
             for y in range(room.y1 + 1, room.y2 - 1):
                 if 0 <= x < self.w and 0 <= y < self.h:
                     self.tiles[x][y] = TILE_FLOOR
+                    self.materials[x][y] = MAT_COBBLE
 
     def carve_h_tunnel(self, x1: int, x2: int, y: int):
         for x in range(min(x1, x2), max(x1, x2) + 1):
             if 0 <= x < self.w and 0 <= y < self.h:
                 self.tiles[x][y] = TILE_FLOOR
+                self.materials[x][y] = MAT_COBBLE
 
     def carve_v_tunnel(self, y1: int, y2: int, x: int):
         for y in range(min(y1, y2), max(y1, y2) + 1):
             if 0 <= x < self.w and 0 <= y < self.h:
                 self.tiles[x][y] = TILE_FLOOR
+                self.materials[x][y] = MAT_COBBLE
 
     def generate(self, max_rooms: int, room_min: int, room_max: int):
         for _ in range(max_rooms):
@@ -91,6 +109,58 @@ class Dungeon:
             return self.tiles[x][y] == TILE_WALL
         return True
 
+    def material_at(self, x: int, y: int) -> int:
+        if 0 <= x < self.w and 0 <= y < self.h:
+            return self.materials[x][y]
+        return MAT_BRICK
+
+    def stamp_prefab(self, px: int, py: int, cells: List[str], legend: dict):
+        """Stamp a prefab at top-left (px,py). Legend maps chars to {tile, material}.
+        tile: 'wall' | 'floor' | 'void'
+        material: 'brick' | 'cobble' | 'dirt' (optional)
+        """
+        tile_map = {
+            'wall': TILE_WALL,
+            'floor': TILE_FLOOR,
+        }
+        mat_map = {
+            'brick': MAT_BRICK,
+            'cobble': MAT_COBBLE,
+            'stone': MAT_COBBLE,
+            'dirt': MAT_DIRT,
+            'moss': MAT_MOSS,
+            'sand': MAT_SAND,
+            'iron': MAT_IRON,
+            'grass': MAT_GRASS,
+            'water': MAT_WATER,
+            'lava': MAT_LAVA,
+            'marble': MAT_MARBLE,
+            'wood': MAT_WOOD,
+        }
+        h = len(cells)
+        w = len(cells[0]) if h else 0
+        for y in range(h):
+            for x in range(w):
+                ch = cells[y][x]
+                entry = legend.get(ch)
+                if not entry:
+                    continue
+                if entry.get('tile') == 'void':
+                    continue
+                dx, dy = px + x, py + y
+                if not (0 <= dx < self.w and 0 <= dy < self.h):
+                    continue
+                tile_name = entry.get('tile') if isinstance(entry, dict) else 'floor'
+                if not isinstance(tile_name, str):
+                    tile_name = 'floor'
+                mat_name = entry.get('material', 'cobble') if isinstance(entry, dict) else 'cobble'
+                if not isinstance(mat_name, str):
+                    mat_name = 'cobble'
+                t = tile_map.get(tile_name, TILE_FLOOR)
+                m = mat_map.get(mat_name, MAT_COBBLE)
+                self.tiles[dx][dy] = t
+                self.materials[dx][dy] = m
+
 
 def generate_dungeon(
     width: int,
@@ -113,6 +183,7 @@ def generate_dungeon(
     Returns
     - Dungeon instance with tiles and room list populated
     """
+    rnd_state = None
     if seed is not None:
         rnd_state = random.getstate()
         random.seed(seed)
@@ -141,6 +212,6 @@ def generate_dungeon(
 
         return d
     finally:
-        if seed is not None:
+        if rnd_state is not None:
             # Restore RNG state
             random.setstate(rnd_state)

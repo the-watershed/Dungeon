@@ -1,0 +1,24 @@
+{
+  "name": "Crypt Chapel",
+  "version": 1,
+  "width": 13,
+  "height": 9,
+  "cells": [
+    "#############",
+    "#...........#",
+    "#.###...###.#",
+    "#.#.......#.#",
+    "#.#..###..#.#",
+    "#.#.......#.#",
+    "#.###...###.#",
+    "#...........#",
+    "#############"
+  ],
+  "legend": {
+    "#": { "tile": "wall", "material": "brick" },
+    ".": { "tile": "floor", "material": "cobble" },
+    " ": { "tile": "void" }
+  },
+  "tags": ["crypt", "chapel", "symmetric"],
+  "notes": "A small chapel-like chamber with symmetrical alcoves."
+}
