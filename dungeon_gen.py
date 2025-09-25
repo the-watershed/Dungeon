@@ -32,9 +32,20 @@ class Rect:
         return (self.x1 < other.x2 and self.x2 > other.x1 and
                 self.y1 < other.y2 and self.y2 > other.y1)
 
+    def __contains__(self, point: tuple[int, int]) -> bool:
+        x, y = point
+        return self.x1 <= x < self.x2 and self.y1 <= y < self.y2
+
+
 
 TILE_FLOOR = 0
 TILE_WALL = 1
+TILE_DOOR = 2
+
+# Door states
+DOOR_CLOSED = 0
+DOOR_OPEN = 1
+DOOR_LOCKED = 2
 
 # Material identifiers (render-agnostic)
 MAT_COBBLE = 0   # stone floor / cobblestone
@@ -58,6 +69,8 @@ class Dungeon:
         self.tiles: List[List[int]] = [[TILE_WALL for _ in range(h)] for _ in range(w)]
         # Materials grid, default to brick (matches initial walls)
         self.materials: List[List[int]] = [[MAT_BRICK for _ in range(h)] for _ in range(w)]
+        # Doors grid, stores DOOR_OPEN, DOOR_CLOSED, etc. A value of -1 means no door.
+        self.doors: List[List[int]] = [[-1 for _ in range(h)] for _ in range(w)]
         self.rooms: List[Rect] = []
 
     def carve_room(self, room: Rect):
@@ -79,6 +92,27 @@ class Dungeon:
                 self.tiles[x][y] = TILE_FLOOR
                 self.materials[x][y] = MAT_COBBLE
 
+    def add_door(self, x, y, locked=False):
+        """Places a door at (x,y) if it's a valid wall location between floors."""
+        if not (0 < x < self.w - 1 and 0 < y < self.h - 1):
+            return False
+        if self.tiles[x][y] != TILE_WALL:
+            return False
+
+        # Check for horizontal passage (floor left/right, wall above/below)
+        is_horizontal = (self.tiles[x-1][y] == TILE_FLOOR and self.tiles[x+1][y] == TILE_FLOOR and
+                         self.tiles[x][y-1] == TILE_WALL and self.tiles[x][y+1] == TILE_WALL)
+        # Check for vertical passage
+        is_vertical = (self.tiles[x][y-1] == TILE_FLOOR and self.tiles[x][y+1] == TILE_FLOOR and
+                       self.tiles[x-1][y] == TILE_WALL and self.tiles[x+1][y] == TILE_WALL)
+
+        if is_horizontal or is_vertical:
+            self.tiles[x][y] = TILE_DOOR
+            self.doors[x][y] = DOOR_LOCKED if locked else DOOR_CLOSED
+            self.materials[x][y] = MAT_WOOD
+            return True
+        return False
+
     def generate(self, max_rooms: int, room_min: int, room_max: int):
         for _ in range(max_rooms):
             w = random.randint(room_min, room_max)
@@ -91,10 +125,13 @@ class Dungeon:
                 continue
 
             self.carve_room(new_room)
+            
+            (new_x, new_y) = new_room.center()
+
             if self.rooms:
                 # connect to previous room with a corridor
                 (prev_x, prev_y) = self.rooms[-1].center()
-                (new_x, new_y) = new_room.center()
+                
                 if random.random() < 0.5:
                     self.carve_h_tunnel(prev_x, new_x, prev_y)
                     self.carve_v_tunnel(prev_y, new_y, new_x)
@@ -103,6 +140,25 @@ class Dungeon:
                     self.carve_h_tunnel(prev_x, new_x, new_y)
 
             self.rooms.append(new_room)
+        
+        # After all rooms and corridors are carved, place doors.
+        door_candidates = []
+        for y in range(1, self.h - 1):
+            for x in range(1, self.w - 1):
+                if self.tiles[x][y] == TILE_WALL:
+                    # Horizontal door candidate
+                    if (self.tiles[x - 1][y] == TILE_FLOOR and self.tiles[x + 1][y] == TILE_FLOOR and
+                            self.tiles[x][y - 1] == TILE_WALL and self.tiles[x][y + 1] == TILE_WALL):
+                        door_candidates.append((x, y))
+                    # Vertical door candidate
+                    elif (self.tiles[x][y - 1] == TILE_FLOOR and self.tiles[x][y + 1] == TILE_FLOOR and
+                            self.tiles[x - 1][y] == TILE_WALL and self.tiles[x + 1][y] == TILE_WALL):
+                        door_candidates.append((x, y))
+
+        # Place doors at a random subset of candidates
+        for x, y in door_candidates:
+            if random.random() < 0.5:  # 50% chance to place a door
+                self.add_door(x, y)
 
     def is_wall(self, x: int, y: int) -> bool:
         if 0 <= x < self.w and 0 <= y < self.h:
