@@ -3,5 +3,12 @@
   "wall": "#",
   "player": "@",
   "dark": " ",
-  "hud_text": true
+  "render_mode": "ascii",
+  "hud_text": true,
+  "dungeon_linearity": 0.7,
+  "dungeon_entropy": 0.4,
+  "dungeon_complexity": 0.0,
+  "dungeon_length": 20,
+  "dungeon_room_min": 4,
+  "dungeon_room_max": 8
 }

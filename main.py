@@ -4,6 +4,7 @@ import time
 import random
 import math
 import re
+from typing import Callable
 
 # Windows-specific: enable ANSI escape processing for colors/cursor control
 msvcrt = None  # ensure defined on all platforms
@@ -26,7 +27,16 @@ if os.name == "nt":
 import json
 
 
-def load_settings(path: str):
+def load_settings(path: str) -> dict:
+	"""Load game settings from JSON file with fallback to defaults.
+	
+	Args:
+		path (str): Absolute or relative path to the settings JSON file
+		
+	Returns:
+		dict: Dictionary containing all game settings. If file doesn't exist or
+		      is malformed, returns default settings. Unknown keys are filtered out.
+	"""
 	defaults = {
 		"floor": " ",
 		"wall": "#",
@@ -34,6 +44,14 @@ def load_settings(path: str):
 		"dark": " ",  # outside light radius
 		"hud_text": True,
 		"map_style": "parchment",  # parchment | dark
+		"dungeon_linearity": 1.0,  # 0.0 (chaotic) to 1.0 (linear)
+		"dungeon_entropy": 0.0,   # 0.0 (no side rooms) to 1.0 (many side rooms)
+		"dungeon_complexity": 0.0, # 0.0 to 1.0, adds extra connections
+		"dungeon_length": 40,
+		"dungeon_room_min": 3,
+		"dungeon_room_max": 12,
+		"dungeon_base_width": 60,  # base dungeon width
+		"dungeon_base_height": 40,  # base dungeon height
 		"minimap": {
 			"enabled": True,
 			"tile": 4,        # pixels per dungeon tile on minimap
@@ -65,23 +83,20 @@ DARK_CH = SETTINGS.get('dark', ' ')
 # Save directory
 SAVE_DIR = os.path.join(os.path.dirname(__file__), 'saves')
 
-LIGHT_RADIUS = 3  # tiles
+LIGHT_RADIUS = 5  # tiles
 FPS = 30
-MAX_ROOMS = 25
-ROOM_MIN_SIZE = 4
-ROOM_MAX_SIZE = 9
 
 # Pygame rendering base configuration
-BASE_GRID_W = 80
+BASE_GRID_W = 100
 BASE_GRID_H = 40
-BASE_WIN_W = 800
+BASE_WIN_W = 1000
 BASE_WIN_H = 600
-BASE_CELL_W = BASE_WIN_W // BASE_GRID_W  # 20
-BASE_CELL_H = BASE_WIN_H // BASE_GRID_H  # 30
+BASE_CELL_W = BASE_WIN_W // BASE_GRID_W  # 10
+BASE_CELL_H = BASE_WIN_H // BASE_GRID_H  # 15
 
 # Parchment palette (RGB) and world palette
 # Parchment remains for minimap; world uses dark background with brown tones
-PARCHMENT_BG = (245, 237, 215)
+PARCHMENT_BG = (74, 71, 65)  # 3/10 brightness level
 WORLD_BG = (32, 24, 16)        # dark brown background
 WALL_LIGHT = (200, 170, 120)   # light brown for walls
 FLOOR_MED = (140, 100, 60)     # medium brown for floors
@@ -106,7 +121,15 @@ MARBLE_WHITE = (220, 220, 228)
 WOOD_BROWN = (136, 94, 62)
 
 # Material -> base color mapping (render-agnostic; used by all renderers)
-def base_color_for_material(mat: int):
+def base_color_for_material(mat: int) -> tuple[int, int, int]:
+	"""Get the base RGB color for a material type.
+	
+	Args:
+		mat (int): Material constant (MAT_BRICK, MAT_DIRT, etc.)
+		
+	Returns:
+		tuple[int, int, int]: RGB color tuple (0-255 range)
+	"""
 	if mat == MAT_BRICK:
 		return WALL_MED_GREY
 	if mat == MAT_DIRT:
@@ -130,25 +153,51 @@ def base_color_for_material(mat: int):
 	# default floors
 	return FLOOR_DARK_GREY
 
-def lit_color_for_material(mat: int, t: float):
+def lit_color_for_material(mat: int, t: float) -> tuple[int, int, int]:
+	"""Get the illuminated color for a material based on distance from light source.
+	
+	Args:
+		mat (int): Material constant (MAT_BRICK, MAT_DIRT, etc.)
+		t (float): Light intensity factor [0,1], where 1 is closest to player
+		
+	Returns:
+		tuple[int, int, int]: RGB color tuple brightened based on light intensity
+	"""
 	# t in [0,1], near 1 close to player
 	base = base_color_for_material(mat)
 	if mat == MAT_BRICK or mat == MAT_IRON:
-		f = 0.6 + 0.4 * t
+		f = 0.6 + 0.4 * t  # Darker materials get less brightness variation
 	elif mat == MAT_WATER:
-		f = 0.5 + 0.3 * t
+		f = 0.5 + 0.3 * t  # Water has moderate brightness range
 	else:
-		f = 0.45 + 0.35 * t
+		f = 0.45 + 0.35 * t  # Default materials have standard brightness range
 	return scale_color(base, f)
 
-def dimmed_color_for_material(mat: int, alpha: float):
-	"""Fog-of-war dimmed color.
-	Use per-material scale ranges so walls are much darker than floors when revealed-but-not-visible.
-	alpha: reveal progress 0..1
+def dimmed_color_for_material(mat: int, alpha: float) -> tuple[int, int, int]:
+	"""Calculate fog-of-war dimmed color for a material.
+	
+	Use per-material scale ranges so walls are much darker than floors when
+	revealed-but-not-visible (explored but outside current light radius).
+	
+	Args:
+		mat (int): Material constant (MAT_BRICK, MAT_DIRT, etc.)
+		alpha (float): Reveal progress [0,1] where 1 is fully revealed
+		
+	Returns:
+		tuple[int, int, int]: RGB color tuple dimmed for fog-of-war effect
 	"""
 	base = base_color_for_material(mat)
 
 	def fow_scale_for_material(m: int, a: float) -> float:
+		"""Calculate fog-of-war brightness scaling factor for a material.
+		
+		Args:
+			m (int): Material constant
+			a (float): Alpha value [0,1] for reveal progress
+			
+		Returns:
+			float: Scaling factor for color brightness in fog-of-war
+		"""
 		a = clamp(a, 0.0, 1.0)
 		# Very dark for walls/iron bars
 		if m == MAT_BRICK or m == MAT_IRON:
@@ -166,14 +215,33 @@ def dimmed_color_for_material(mat: int, alpha: float):
 	scale = fow_scale_for_material(mat, alpha)
 	return scale_color(base, scale)
 
-def scale_color(color, factor):
+def scale_color(color: tuple[int, int, int], factor: float) -> tuple[int, int, int]:
+	"""Scale RGB color by a brightness factor.
+	
+	Args:
+		color (tuple[int, int, int]): Original RGB color tuple
+		factor (float): Scaling factor [0,1] where 0 is black, 1 is original color
+		
+	Returns:
+		tuple[int, int, int]: Scaled RGB color tuple, clamped to [0,255]
+	"""
 	f = max(0.0, min(1.0, factor))
 	r = min(255, int(color[0] * f))
 	g = min(255, int(color[1] * f))
 	b = min(255, int(color[2] * f))
 	return (r, g, b)
 
-def lerp_color(c1, c2, a):
+def lerp_color(c1: tuple[int, int, int], c2: tuple[int, int, int], a: float) -> tuple[int, int, int]:
+	"""Linear interpolation between two RGB colors.
+	
+	Args:
+		c1 (tuple[int, int, int]): Start color RGB tuple
+		c2 (tuple[int, int, int]): End color RGB tuple  
+		a (float): Interpolation factor [0,1] where 0 returns c1, 1 returns c2
+		
+	Returns:
+		tuple[int, int, int]: Interpolated RGB color tuple
+	"""
 	a = clamp(a, 0.0, 1.0)
 	return (
 		int(c1[0] + (c2[0] - c1[0]) * a),
@@ -182,7 +250,13 @@ def lerp_color(c1, c2, a):
 	)
 
 
-def get_term_size():
+def get_term_size() -> tuple[int, int]:
+	"""Get terminal window size in characters.
+	
+	Returns:
+		tuple[int, int]: (columns, rows) of terminal window. Falls back to (80, 25)
+		                 if unable to determine actual size.
+	"""
 	try:
 		import shutil
 		size = shutil.get_terminal_size(fallback=(80, 25))
@@ -191,17 +265,36 @@ def get_term_size():
 		return 80, 25
 
 
-def clamp(v, a, b):
+def clamp(v: float, a: float, b: float) -> float:
+	"""Clamp a value between minimum and maximum bounds.
+	
+	Args:
+		v (float): Value to clamp
+		a (float): Minimum bound
+		b (float): Maximum bound
+		
+	Returns:
+		float: Value clamped to range [a, b]
+	"""
 	return max(a, min(b, v))
 
 
-from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon, MAT_COBBLE, MAT_BRICK, MAT_DIRT, MAT_MOSS, MAT_SAND, MAT_IRON, MAT_GRASS, MAT_WATER, MAT_LAVA, MAT_MARBLE, MAT_WOOD
+from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon, MAT_COBBLE, MAT_BRICK, MAT_DIRT, MAT_MOSS, MAT_SAND, MAT_IRON, MAT_GRASS, MAT_WATER, MAT_LAVA, MAT_MARBLE, MAT_WOOD, TILE_DOOR, DOOR_CLOSED, DOOR_OPEN, DOOR_LOCKED
 from prefab_loader import load_prefabs
 from parchment_renderer import ParchmentRenderer
 # ---------------------------
 # Save/Load helpers
 # ---------------------------
-def encode_tiles(dungeon: 'Dungeon'):
+def encode_tiles(dungeon: 'Dungeon') -> list[str]:
+	"""Encode dungeon tiles into a list of strings for serialization.
+	
+	Args:
+		dungeon (Dungeon): The dungeon object to encode
+		
+	Returns:
+		list[str]: List of strings where each string represents a row,
+		           with '0' for floors and '1' for walls
+	"""
 	# rows as strings of '0' floor and '1' wall
 	rows = []
 	for y in range(dungeon.h):
@@ -210,7 +303,16 @@ def encode_tiles(dungeon: 'Dungeon'):
 	return rows
 
 
-def decode_tiles(rows):
+def decode_tiles(rows: list[str]) -> 'Dungeon':
+	"""Decode strings back into a Dungeon object.
+	
+	Args:
+		rows (list[str]): List of strings where each represents a row,
+		                  with '0' for floors and '1' for walls
+		                  
+	Returns:
+		Dungeon: Reconstructed dungeon object with tiles set from encoded data
+	"""
 	h = len(rows)
 	w = len(rows[0]) if h > 0 else 0
 	d = Dungeon(w, h)
@@ -219,14 +321,33 @@ def decode_tiles(rows):
 			d.tiles[x][y] = TILE_WALL if ch == '1' else TILE_FLOOR
 	return d
 
-def encode_materials(dungeon: 'Dungeon'):
+def encode_materials(dungeon: 'Dungeon') -> list[str]:
+	"""Encode dungeon materials into a list of strings for serialization.
+	
+	Args:
+		dungeon (Dungeon): The dungeon object whose materials to encode
+		
+	Returns:
+		list[str]: List of strings where each string represents a row,
+		           with single digit characters representing material types
+	"""
 	rows = []
 	for y in range(dungeon.h):
 		row = [str(dungeon.materials[x][y]) for x in range(dungeon.w)]
 		rows.append(''.join(row))
 	return rows
 
-def decode_materials(dungeon: 'Dungeon', rows):
+def decode_materials(dungeon: 'Dungeon', rows: list[str]) -> 'Dungeon':
+	"""Decode material strings back into a Dungeon object's material grid.
+	
+	Args:
+		dungeon (Dungeon): The dungeon object to update with materials
+		rows (list[str]): List of strings where each represents a row,
+		                  with single digits representing material types
+		                  
+	Returns:
+		Dungeon: The same dungeon object with materials updated
+	"""
 	if not rows:
 		return dungeon
 	for y, row in enumerate(rows):
@@ -245,8 +366,20 @@ def decode_materials(dungeon: 'Dungeon', rows):
 # Reachability and exposed wall helpers
 from collections import deque
 
-def compute_reachable_floors(d: Dungeon, start_x: int, start_y: int):
-	"""Flood fill from the start to find reachable floor tiles (4-neighborhood)."""
+def compute_reachable_floors(d: Dungeon, start_x: int, start_y: int) -> set[tuple[int, int]]:
+	"""Find all floor tiles reachable from a starting position via flood fill.
+	
+	Uses 4-directional connectivity (up/down/left/right) to determine reachability.
+	If the starting position is not a floor, searches nearby for the closest floor.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		start_x (int): Starting X coordinate
+		start_y (int): Starting Y coordinate
+		
+	Returns:
+		set[tuple[int, int]]: Set of (x, y) coordinates of all reachable floor tiles
+	"""
 	reachable = set()
 	if not (0 <= start_x < d.w and 0 <= start_y < d.h):
 		return reachable
@@ -280,9 +413,17 @@ def compute_reachable_floors(d: Dungeon, start_x: int, start_y: int):
 					q.append((nx, ny))
 	return reachable
 
-def count_total_exposed_walls(d: Dungeon, reachable_floors=None) -> int:
-	"""Count walls that are exposed to any adjacent floor.
-	If reachable_floors is provided, only count walls exposed to a reachable floor tile.
+def count_total_exposed_walls(d: Dungeon, reachable_floors: set[tuple[int, int]] | None = None) -> int:
+	"""Count wall tiles that are adjacent to at least one floor tile.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		reachable_floors (set[tuple[int, int]], optional): If provided, only count
+		                  walls exposed to reachable floor tiles. If None, count
+		                  walls exposed to any floor tile.
+		                  
+	Returns:
+		int: Number of wall tiles that have at least one adjacent floor tile
 	"""
 	total = 0
 	for y in range(d.h):
@@ -306,9 +447,17 @@ def count_total_exposed_walls(d: Dungeon, reachable_floors=None) -> int:
 	return total
 
 
-def count_total_exposed_bricks(d: Dungeon, reachable_floors=None) -> int:
-	"""Count exposed brick walls (MAT_BRICK) adjacent to at least one reachable floor.
-	If reachable_floors is None, counts exposed to any floor (not recommended for gating).
+def count_total_exposed_bricks(d: Dungeon, reachable_floors: set[tuple[int, int]] | None = None) -> int:
+	"""Count exposed brick walls (MAT_BRICK) adjacent to at least one floor tile.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		reachable_floors (set[tuple[int, int]], optional): If provided, only count
+		                  brick walls exposed to reachable floor tiles. If None,
+		                  counts exposed to any floor (not recommended for gating).
+		                  
+	Returns:
+		int: Number of brick wall tiles that have at least one adjacent floor tile
 	"""
 	total = 0
 	for y in range(d.h):
@@ -334,8 +483,18 @@ def count_total_exposed_bricks(d: Dungeon, reachable_floors=None) -> int:
 	return total
 
 def count_exposed_bricks_touched(d: Dungeon, touched: set[tuple[int,int]], reachable_floors: set[tuple[int,int]]) -> int:
-	"""Count how many touched bricks are exposed to any reachable floor tile.
-	Safe against overcounting; processes all touched coordinates.
+	"""Count how many touched brick walls are exposed to reachable floor tiles.
+	
+	Safe against overcounting; processes all touched coordinates and validates
+	that they are still valid brick walls exposed to reachable floors.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		touched (set[tuple[int,int]]): Set of (x,y) coordinates that have been touched
+		reachable_floors (set[tuple[int,int]]): Set of reachable floor coordinates
+		
+	Returns:
+		int: Number of touched brick walls that are exposed to reachable floors
 	"""
 	if not touched:
 		return 0
@@ -362,8 +521,15 @@ def count_exposed_bricks_touched(d: Dungeon, touched: set[tuple[int,int]], reach
 			cnt += 1
 	return cnt
 
-# Count how many brick wall tiles exist in a dungeon
 def count_total_bricks(d: Dungeon) -> int:
+	"""Count total number of brick wall tiles in the dungeon.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		
+	Returns:
+		int: Total count of wall tiles with MAT_BRICK material
+	"""
 	total = 0
 	for y in range(d.h):
 		for x in range(d.w):
@@ -374,8 +540,15 @@ def count_total_bricks(d: Dungeon) -> int:
 				continue
 	return total
 
-# Count totals for walls and floors
 def count_total_walls(d: Dungeon) -> int:
+	"""Count total number of wall tiles in the dungeon.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		
+	Returns:
+		int: Total count of wall tiles regardless of material
+	"""
 	total = 0
 	for y in range(d.h):
 		for x in range(d.w):
@@ -384,6 +557,14 @@ def count_total_walls(d: Dungeon) -> int:
 	return total
 
 def count_total_floors(d: Dungeon) -> int:
+	"""Count total number of floor tiles in the dungeon.
+	
+	Args:
+		d (Dungeon): The dungeon to analyze
+		
+	Returns:
+		int: Total count of floor tiles regardless of material
+	"""
 	total = 0
 	for y in range(d.h):
 		for x in range(d.w):
@@ -392,7 +573,20 @@ def count_total_floors(d: Dungeon) -> int:
 	return total
 
 
-def session_to_dict(dungeon: 'Dungeon', explored: set, px: int, py: int, levels=None, current_index=0):
+def session_to_dict(dungeon: 'Dungeon', explored: set, px: int, py: int, levels: list | None = None, current_index: int = 0) -> dict:
+	"""Convert current game session to a dictionary for serialization.
+	
+	Args:
+		dungeon (Dungeon): Current dungeon state
+		explored (set): Set of explored tile coordinates
+		px (int): Player X coordinate
+		py (int): Player Y coordinate
+		levels (list, optional): List of level data. If None, creates from current dungeon
+		current_index (int): Index of current level in levels list
+		
+	Returns:
+		dict: Dictionary containing all session data ready for JSON serialization
+	"""
 	if levels is None:
 		levels = []
 	# include current dungeon as level 0 if levels is empty
@@ -413,7 +607,19 @@ def session_to_dict(dungeon: 'Dungeon', explored: set, px: int, py: int, levels=
 	return data
 
 
-def dict_to_session(data):
+def dict_to_session(data: dict) -> tuple['Dungeon', set, int, int, list, int]:
+	"""Convert dictionary data back to game session objects.
+	
+	Args:
+		data (dict): Dictionary containing serialized session data
+		
+	Returns:
+		tuple: (dungeon, explored_set, player_x, player_y, levels_list, current_index)
+		
+	Raises:
+		ValueError: If save data is invalid or corrupted
+		Exception: If deserialization fails for any reason
+	"""
 	try:
 		idx = int(data.get('current_index', 0))
 		levels = data.get('levels', [])
@@ -432,12 +638,36 @@ def dict_to_session(data):
 
 
 def sanitize_name(name: str) -> str:
+	"""Sanitize a filename to be safe for filesystem use.
+	
+	Removes invalid characters, limits length, and provides fallback.
+	
+	Args:
+		name (str): Raw name input from user
+		
+	Returns:
+		str: Sanitized filename safe for filesystem use, max 40 chars
+	"""
 	name = name.strip()
 	name = re.sub(r"[^A-Za-z0-9_-]+", "_", name)
 	return name[:40] if name else "player"
 
 
-def save_session(name: str, dungeon: 'Dungeon', explored: set, px: int, py: int, levels=None, current_index=0):
+def save_session(name: str, dungeon: 'Dungeon', explored: set, px: int, py: int, levels: list | None = None, current_index: int = 0) -> str:
+	"""Save current game session to disk as JSON file.
+	
+	Args:
+		name (str): Save file name (will be sanitized)
+		dungeon (Dungeon): Current dungeon state
+		explored (set): Set of explored tile coordinates
+		px (int): Player X coordinate
+		py (int): Player Y coordinate
+		levels (list, optional): List of level data. If None, creates from current dungeon
+		current_index (int): Index of current level in levels list
+		
+	Raises:
+		OSError: If unable to create save directory or write file
+	"""
 	os.makedirs(SAVE_DIR, exist_ok=True)
 	data = session_to_dict(dungeon, explored, px, py, levels=levels, current_index=current_index)
 	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
@@ -446,14 +676,31 @@ def save_session(name: str, dungeon: 'Dungeon', explored: set, px: int, py: int,
 	return path
 
 
-def load_session(name: str):
+def load_session(name: str) -> tuple['Dungeon', set, int, int, list, int]:
+	"""Load a game session from disk.
+	
+	Args:
+		name (str): Save file name (will be sanitized)
+		
+	Returns:
+		tuple: (dungeon, explored_set, player_x, player_y, levels_list, current_index)
+		
+	Raises:
+		FileNotFoundError: If save file doesn't exist
+		Exception: If save file is corrupted or invalid
+	"""
 	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
 	with open(path, 'r', encoding='utf-8') as f:
 		data = json.load(f)
 	return dict_to_session(data)
 
 
-def list_saves():
+def list_saves() -> list[str]:
+	"""Get list of available save files.
+	
+	Returns:
+		list[str]: List of save file names (without .json extension), sorted alphabetically
+	"""
 	if not os.path.isdir(SAVE_DIR):
 		return []
 	files = []
@@ -466,11 +713,36 @@ def list_saves():
 
 # Field of View via symmetrical shadowcasting (8 octants)
 class FOV:
+	"""Field of View calculator using symmetrical shadowcasting algorithm.
+	
+	Implements 8-octant shadowcasting to determine which tiles are visible
+	from a given position within a specified radius. Handles light blocking
+	based on wall tiles.
+	
+	Attributes:
+		dungeon (Dungeon): The dungeon to calculate FOV for
+	"""
 	def __init__(self, dungeon: Dungeon):
+		"""Initialize FOV calculator.
+		
+		Args:
+			dungeon (Dungeon): The dungeon object to calculate FOV for
+		"""
 		self.dungeon = dungeon
 
-	def compute(self, cx, cy, radius):
-		visible = {(cx, cy): 0.0}
+	def compute(self, cx: int, cy: int, radius: int) -> set[tuple[int, int]]:
+		"""Compute field of view from a center position.
+		
+		Args:
+			cx (int): Center X coordinate
+			cy (int): Center Y coordinate
+			radius (int): Maximum visibility radius in tiles
+			
+		Returns:
+			set[tuple[int, int]]: Set of (x, y) coordinates of visible tiles
+		"""
+		visible = set()
+		visible.add((cx, cy))
 
 		def blocks_light(x, y):
 			return self.dungeon.is_wall(x, y)
@@ -480,7 +752,7 @@ class FOV:
 			dy = y - cy
 			dist = math.sqrt(dx * dx + dy * dy)
 			if dist <= radius:
-				visible[(x, y)] = dist
+				visible.add((x, y))
 
 		# Octant processing
 		def cast_shadows(row, start_slope, end_slope, xx, xy, yx, yy):
@@ -547,29 +819,50 @@ class FOV:
 
 
 # Rendering helpers
-CSI = "\x1b["
+CSI = "\x1b["  # ANSI Control Sequence Introducer
 
 
-def hide_cursor():
+def hide_cursor() -> None:
+	"""Hide terminal cursor using ANSI escape sequence."""
 	sys.stdout.write(CSI + "?25l")
 	sys.stdout.flush()
 
 
-def show_cursor():
+def show_cursor() -> None:
+	"""Show terminal cursor using ANSI escape sequence."""
 	sys.stdout.write(CSI + "?25h")
 	sys.stdout.flush()
 
 
-def clear_screen():
+def clear_screen() -> None:
+	"""Clear terminal screen and move cursor to top-left."""
 	sys.stdout.write(CSI + "2J" + CSI + "H")
 	sys.stdout.flush()
 
 
-def move_cursor(row=1, col=1):
+def move_cursor(row: int = 1, col: int = 1) -> None:
+	"""Move terminal cursor to specified position.
+	
+	Args:
+		row (int): Row number (1-based)
+		col (int): Column number (1-based)
+	"""
 	sys.stdout.write(f"{CSI}{row};{col}H")
 
 
-def build_frame(dungeon: Dungeon, px, py, visible_map, explored):
+def build_frame(dungeon: Dungeon, px: int, py: int, visible_map: set, explored: set) -> str:
+	"""Build ASCII frame for terminal display.
+	
+	Args:
+		dungeon (Dungeon): The dungeon to render
+		px (int): Player X coordinate
+		py (int): Player Y coordinate
+		visible_map (set): Set of visible tile coordinates
+		explored (set): Set of previously explored coordinates
+		
+	Returns:
+		str: Multi-line string representing the rendered dungeon frame
+	"""
 	# Terminal renderer: show player '@', walls '#', and empty floor as ' '.
 
 	w, h = dungeon.w, dungeon.h
@@ -587,6 +880,9 @@ def build_frame(dungeon: Dungeon, px, py, visible_map, explored):
 				explored.add((x, y))
 				if tile == TILE_WALL:
 					row_chars.append(WALL_CH)
+				elif tile == TILE_DOOR:
+					# Render doors with a specific character
+					row_chars.append('+')  # Traditional door character
 				else:
 					# Floors render as configured floor character (may be space or '#')
 					row_chars.append(FLOOR_CH)
@@ -597,7 +893,13 @@ def build_frame(dungeon: Dungeon, px, py, visible_map, explored):
 	return '\n'.join(lines)
 
 
-def read_input_nonblocking():
+def read_input_nonblocking() -> str | None:
+	"""Read keyboard input without blocking (Windows-specific).
+	
+	Returns:
+		str | None: Character pressed, or None if no key was pressed
+		             Returns None on non-Windows platforms where msvcrt unavailable
+	"""
 	if msvcrt is None:
 		return None
 	if msvcrt.kbhit():
@@ -612,33 +914,45 @@ def read_input_nonblocking():
 	return None
 
 
-def run_terminal():
+def run_terminal() -> None:
+	"""Run the game in terminal mode with ASCII rendering.
+	
+	Uses ANSI escape sequences for display and msvcrt for input on Windows.
+	Game loop handles player movement, FOV calculation, and terminal rendering.
+	"""
 	random.seed()
 	cols, rows = get_term_size()
 	# Reserve last line for HUD
 	rows = max(15, rows - 1)
 	cols = max(40, cols)
 
-	# Use modular dungeon generator
-	dungeon = generate_dungeon(cols, rows, complexity=0.5, length=MAX_ROOMS,
-		room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE)
+	# Use modular dungeon generator with settings
+	dungeon_params = {
+		'width': cols,
+		'height': rows,
+		'complexity': SETTINGS.get('dungeon_complexity', 0.2),
+		'length': SETTINGS.get('dungeon_length', 25),
+		'room_min': SETTINGS.get('dungeon_room_min', 4),
+		'room_max': SETTINGS.get('dungeon_room_max', 9),
+		'linearity': SETTINGS.get('dungeon_linearity', .7),
+		'entropy': SETTINGS.get('dungeon_entropy', 0.0),
+	}
+	dungeon = generate_dungeon(**dungeon_params)
 
-	# Place player at center of first room or fallback to first open tile
+	# Place player at center of first room, ensuring they're on a floor tile
 	if dungeon.rooms:
-		px, py = dungeon.rooms[0].center()
-		# ensure inside floor
+		room = dungeon.rooms[0]
+		px, py = room.center()
+		
+		# Ensure player starts on a floor tile within the room
 		if dungeon.is_wall(px, py):
-			# find nearby floor
+			# Search for a floor tile within the room bounds
 			found = False
-			for r in range(1, 10):
-				for dx in range(-r, r + 1):
-					for dy in range(-r, r + 1):
-						x, y = px + dx, py + dy
-						if 0 <= x < dungeon.w and 0 <= y < dungeon.h and not dungeon.is_wall(x, y):
-							px, py = x, y
-							found = True
-							break
-					if found:
+			for x in range(room.x1 + 1, room.x2 - 1):
+				for y in range(room.y1 + 1, room.y2 - 1):
+					if not dungeon.is_wall(x, y):
+						px, py = x, y
+						found = True
 						break
 				if found:
 					break
@@ -738,32 +1052,42 @@ def run_pygame():
 	cell_w, cell_h = BASE_CELL_W, BASE_CELL_H
 
 	# UI panel configuration (character columns)
-	UI_COLS = 12  # width of UI panel in characters
+	UI_COLS = 20  # width of UI panel in characters
 	BORDER_COL = UI_COLS  # vertical border column index
 
 	# Dungeon uses the remaining columns
-	map_w = max(10, grid_w - UI_COLS - 1)
-	dungeon = generate_dungeon(map_w, grid_h, complexity=0.5, length=MAX_ROOMS,
-		room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE)
+	map_w = max(10, grid_w - UI_COLS - 1 - 20)
+	dungeon_params = {
+		'width': map_w,
+		'height': grid_h,
+		'complexity': SETTINGS.get('dungeon_complexity', 0.2),
+		'length': SETTINGS.get('dungeon_length', 25),
+		'room_min': SETTINGS.get('dungeon_room_min', 4),
+		'room_max': SETTINGS.get('dungeon_room_max', 9),
+		'linearity': SETTINGS.get('dungeon_linearity', 1.0),
+		'entropy': SETTINGS.get('dungeon_entropy', 0.0),
+	}
+	dungeon = generate_dungeon(**dungeon_params)
 
-	# Place player
+	# Place player at center of first room, ensuring they're on a floor tile
 	if dungeon.rooms:
-		px, py = dungeon.rooms[0].center()
+		room = dungeon.rooms[0]
+		px, py = room.center()
+		
+		# Ensure player starts on a floor tile within the room
 		if dungeon.is_wall(px, py):
+			# Search for a floor tile within the room bounds
 			found = False
-			for r in range(1, 10):
-				for dx in range(-r, r + 1):
-					for dy in range(-r, r + 1):
-						x, y = px + dx, py + dy
-						if 0 <= x < dungeon.w and 0 <= y < dungeon.h and not dungeon.is_wall(x, y):
-							px, py = x, y
-							found = True
-							break
-					if found:
+			for x in range(room.x1 + 1, room.x2 - 1):
+				for y in range(room.y1 + 1, room.y2 - 1):
+					if not dungeon.is_wall(x, y):
+						px, py = x, y
+						found = True
 						break
 				if found:
 					break
 	else:
+		# fallback: find any floor
 		px = py = 1
 		for y in range(dungeon.h):
 			for x in range(dungeon.w):
@@ -798,6 +1122,12 @@ def run_pygame():
 	light_radius = LIGHT_RADIUS   # dynamic light radius for pygame mode
 
 	# Initialize Pygame
+	# Set window position before initialization to make sure window is visible
+	try:
+		os.environ['SDL_VIDEO_WINDOW_POS'] = '100,100'  # Position window away from edges
+	except:
+		pass
+	
 	pygame.init()
 	screen = pygame.display.set_mode((win_w, win_h))
 	pygame.display.set_caption("ASCII Dungeon (Resizable)")
@@ -808,7 +1138,14 @@ def run_pygame():
 	# One-run milestone tracker for exploration announcements
 	announced_milestones: set[int] = set()
 
-	def add_message(text: str):
+	def add_message(text: str) -> None:
+		"""Add a message to the message log with timestamp.
+		
+		Automatically manages log size to prevent memory growth.
+		
+		Args:
+			text (str): Message text to add to log
+		"""
 		# Keep log small to avoid memory growth
 		message_log.append({'t': time.time(), 'text': str(text)})
 		if len(message_log) > 200:
@@ -824,7 +1161,18 @@ def run_pygame():
 	# Font/glyph cache builder (rebuild on resize)
 	preferred_fonts = ["Courier New", "Consolas", "Lucida Console", "DejaVu Sans Mono", "Monaco"]
 
-	def build_font(ch_h):
+	def build_font(ch_h: int) -> pygame.font.Font:
+		"""Build optimal font for given cell height.
+		
+		Tries to find the largest font that fits exactly in the cell dimensions.
+		Searches through preferred fonts and sizes to maximize crispness.
+		
+		Args:
+			ch_h (int): Cell height in pixels
+			
+		Returns:
+			pygame.font.Font: Font object optimized for the cell size
+		"""
 		# Improve crispness by choosing the largest font that fits the cell exactly
 		# Try settings overrides first, then preferred list, scanning down sizes
 		max_size = max(6, min(48, ch_h))
@@ -860,7 +1208,18 @@ def run_pygame():
 		# Fallback
 		return best or pygame.font.Font(None, max(6, ch_h - 4))
 
-	def build_glyph_cache(font_obj):
+	def build_glyph_cache(font_obj: pygame.font.Font):
+		"""Build glyph rendering cache for performance.
+		
+		Creates a caching function that renders and stores glyph surfaces
+		to avoid repeated font rendering operations.
+		
+		Args:
+			font_obj (pygame.font.Font): Font to use for glyph rendering
+			
+		Returns:
+			callable: Function that takes (char, color) and returns pygame.Surface
+		"""
 		# Characters we need to render
 		ramp = " .:-=+*%"  # kept for potential future use
 		glyphs_needed = {WALL_CH, PLAYER_CH}
@@ -884,22 +1243,201 @@ def run_pygame():
 	parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False)
 	parchment_renderer.build_layers(win_w, win_h)
 	parchment_static = parchment_renderer.generate(win_w, win_h)
-	render_glyph = build_glyph_cache(font)
+	# render_glyph: type ignore to work around nested function type inference issue
+	render_glyph = build_glyph_cache(font)  # type: ignore
 
-	# Prebuild a simple dither pattern to overlay blocks (adds texture)
-	def build_dither_pattern(w, h):
+	# Prebuild texture patterns for different materials
+	def build_material_texture(w, h, material_type):
+		"""Create texture patterns specific to different material types."""
 		pat = pygame.Surface((w, h), pygame.SRCALPHA)
 		pat.fill((0, 0, 0, 0))
-		# 2x2 checkerboard repeated to cell size
-		alpha = 28  # subtle
-		col = (*INK_DARK, alpha)
-		for y in range(0, h, 2):
-			for x in range(0, w, 2):
-				pat.fill(col, (x, y, 1, 1))
-				if x + 1 < w and y + 1 < h:
-					pat.fill(col, (x + 1, y + 1, 1, 1))
+		
+		if material_type == 'cobble':
+			# Cobblestone: irregular stone pattern
+			alpha = 120  # Much more visible
+			dark_col = (*INK_DARK, alpha)
+			light_col = (*WALL_LIGHT, alpha // 2)
+			# Create irregular stone blocks
+			for y in range(0, h, 3):
+				for x in range(0, w, 4):
+					# Vary block sizes slightly
+					bw = min(3 + (x + y) % 2, w - x)
+					bh = min(2 + (x + y) % 2, h - y)
+					if (x + y) % 3 == 0:
+						pat.fill(dark_col, (x, y, bw, 1))  # Top edge
+						pat.fill(dark_col, (x, y, 1, bh))  # Left edge
+					else:
+						pat.fill(light_col, (x + bw - 1, y, 1, bh))  # Right highlight
+		
+		elif material_type == 'brick':
+			# Brick: regular rectangular pattern
+			alpha = 120  # Much more visible
+			mortar_col = (*INK_DARK, alpha)
+			highlight_col = (*WALL_LIGHT, alpha // 3)
+			brick_w, brick_h = 6, 3
+			for y in range(0, h, brick_h):
+				offset = (brick_w // 2) if (y // brick_h) % 2 else 0
+				for x in range(-offset, w, brick_w):
+					if x >= 0 and y < h:
+						# Mortar lines
+						pat.fill(mortar_col, (x, y, min(brick_w, w - x), 1))
+						pat.fill(mortar_col, (x, y, 1, min(brick_h, h - y)))
+						# Brick highlight
+						if x + brick_w - 1 < w and y + brick_h - 1 < h:
+							pat.fill(highlight_col, (x + brick_w - 1, y + 1, 1, brick_h - 2))
+		
+		elif material_type == 'marble':
+			# Marble: veined pattern
+			alpha = 80  # More visible
+			vein_col = (*INK_DARK, alpha)
+			highlight_col = (*MARBLE_WHITE, alpha // 2)
+			# Create diagonal veins
+			for i in range(w + h):
+				x = i % w
+				y = (i * 2) % h
+				if x < w and y < h:
+					pat.fill(vein_col, (x, y, 1, 1))
+				# Counter diagonal
+				x2 = (w - 1 - i) % w
+				y2 = (i * 3) % h
+				if x2 < w and y2 < h and (x2 + y2) % 4 == 0:
+					pat.fill(highlight_col, (x2, y2, 1, 1))
+		
+		elif material_type == 'wood':
+			# Wood: grain pattern
+			alpha = 90  # More visible
+			grain_col = (*INK_DARK, alpha)
+			highlight_col = (*WALL_LIGHT, alpha // 2)
+			# Horizontal wood grain
+			for y in range(0, h, 2):
+				grain_y = y + ((y // 4) % 2)  # Slight wave
+				if grain_y < h:
+					for x in range(0, w, 3):
+						pat.fill(grain_col, (x, grain_y, min(2, w - x), 1))
+			# Vertical highlights
+			for x in range(2, w, 8):
+				for y in range(h):
+					if (x + y) % 3 == 0:
+						pat.fill(highlight_col, (x, y, 1, 1))
+		
+		elif material_type == 'iron':
+			# Iron: metallic pattern with rivets
+			alpha = 100  # More visible
+			rivet_col = (*INK_DARK, alpha)
+			highlight_col = (*IRON_GREY, alpha // 2)
+			# Rivets in grid pattern
+			for y in range(2, h, 6):
+				for x in range(2, w, 6):
+					# Rivet shadow
+					pat.fill(rivet_col, (x, y, 2, 2))
+					# Rivet highlight
+					if x + 1 < w and y + 1 < h:
+						pat.fill(highlight_col, (x + 1, y, 1, 1))
+			# Metal panel lines
+			for y in range(0, h, 8):
+				pat.fill(rivet_col, (0, y, w, 1))
+		
+		else:
+			# Default: simple checkerboard dither
+			alpha = 100  # Much more visible
+			col = (*INK_DARK, alpha)
+			for y in range(0, h, 2):
+				for x in range(0, w, 2):
+					pat.fill(col, (x, y, 1, 1))
+					if x + 1 < w and y + 1 < h:
+						pat.fill(col, (x + 1, y + 1, 1, 1))
+		
 		return pat
 
+	def build_dither_pattern(w, h):
+		"""Build default dither pattern (backwards compatibility)."""
+		return build_material_texture(w, h, 'default')
+
+	# Create texture patterns for each material type
+	texture_patterns = {}
+	material_types = ['cobble', 'brick', 'marble', 'wood', 'iron', 'moss', 'sand', 'grass', 'water', 'lava', 'dirt', 'default']
+	for mat_type in material_types:
+		texture_patterns[mat_type] = build_material_texture(cell_w, cell_h, mat_type)
+	
+	def get_material_texture_name(mat_constant: int) -> str:
+		"""Map material constants to texture names.
+		
+		Args:
+			mat_constant (int): Material constant from dungeon_gen.py
+			
+		Returns:
+			str: Corresponding texture name for the material
+		"""
+		material_map = {
+			MAT_COBBLE: 'cobble',
+			MAT_BRICK: 'brick', 
+			MAT_DIRT: 'dirt',
+			MAT_MOSS: 'moss',
+			MAT_SAND: 'sand',
+			MAT_IRON: 'iron',
+			MAT_GRASS: 'grass',
+			MAT_WATER: 'water',
+			MAT_LAVA: 'lava',
+			MAT_MARBLE: 'marble',
+			MAT_WOOD: 'wood'
+		}
+		return material_map.get(mat_constant, 'default')
+	
+	def get_material_ascii_char_and_color(mat_constant: int, is_wall: bool) -> tuple[str, tuple[int, int, int]]:
+		"""Get ASCII character and color for a material type.
+		
+		Args:
+			mat_constant (int): Material constant from dungeon_gen.py
+			is_wall (bool): True if this is a wall tile, False for floor
+			
+		Returns:
+			tuple[str, tuple[int, int, int]]: Character and RGB color
+		"""
+		if is_wall:
+			# WALLS: Use solid/dense characters - always clearly distinguishable from floors
+			if mat_constant == MAT_BRICK:
+				return '█', (80, 50, 30)  # SOLID block, dark brick brown
+			elif mat_constant == MAT_IRON:
+				return '█', (60, 66, 72)  # SOLID block, dark iron grey
+			elif mat_constant == MAT_MARBLE:
+				return '█', (120, 120, 128)  # SOLID block, darker marble
+			elif mat_constant == MAT_WOOD:
+				return '█', (86, 54, 32)  # SOLID block, dark wood brown
+			elif mat_constant == MAT_MOSS:
+				return '█', (42, 64, 44)  # SOLID block, dark moss green
+			elif mat_constant == MAT_SAND:
+				return '█', (126, 104, 60)  # SOLID block, dark sandstone
+			elif mat_constant == MAT_DIRT:
+				return '█', (70, 56, 40)  # SOLID block, dark dirt brown
+			else:
+				return '█', (90, 60, 40)  # SOLID block, dark default wall
+		else:
+			# FLOORS: Use very light colors nearly as light as parchment (245, 237, 215)
+			if mat_constant == MAT_COBBLE:
+				return ' ', (240, 232, 210)  # Nearly parchment with slight grey tint
+			elif mat_constant == MAT_DIRT:
+				return ' ', (240, 230, 200)  # Nearly parchment with slight brown tint
+			elif mat_constant == MAT_MOSS:
+				return ' ', (240, 240, 215)  # Nearly parchment with very slight green tint
+			elif mat_constant == MAT_SAND:
+				return ' ', (248, 240, 220)  # Nearly parchment with slight sand tint
+			elif mat_constant == MAT_GRASS:
+				return ' ', (242, 240, 218)  # Nearly parchment with very slight green tint
+			elif mat_constant == MAT_WATER:
+				return ' ', (235, 235, 220)  # Nearly parchment with very slight blue tint
+			elif mat_constant == MAT_LAVA:
+				return ' ', (248, 235, 210)  # Nearly parchment with very slight orange tint
+			elif mat_constant == MAT_MARBLE:
+				return ' ', (250, 245, 225)  # Slightly lighter than parchment
+			elif mat_constant == MAT_WOOD:
+				return ' ', (242, 232, 205)  # Nearly parchment with slight wood tint
+			elif mat_constant == MAT_BRICK:
+				return ' ', (243, 230, 200)  # Nearly parchment with slight brick tint
+			elif mat_constant == MAT_IRON:
+				return ' ', (240, 237, 220)  # Nearly parchment with very slight grey tint
+			else:
+				return ' ', (245, 235, 210)  # Nearly identical to parchment
+	
 	dither_pattern = build_dither_pattern(cell_w, cell_h)
 
 	# Minimap reveal buffers (progress + noise) for watercolor effect
@@ -936,7 +1474,17 @@ def run_pygame():
 	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 
 	# One-frame alpha panel drawer in grid coordinates
-	def draw_panel_grid(x_cells: int, y_cells: int, w_cells: int, h_cells: int, color=(0,0,0), alpha: int = 128):
+	def draw_panel_grid(x_cells: int, y_cells: int, w_cells: int, h_cells: int, color: tuple[int, int, int] = (0,0,0), alpha: int = 128) -> None:
+		"""Draw a translucent panel background with grid overlay.
+		
+		Args:
+			x_cells (int): Starting X position in cell coordinates
+			y_cells (int): Starting Y position in cell coordinates
+			w_cells (int): Width in cell units
+			h_cells (int): Height in cell units
+			color (tuple[int, int, int]): RGB color for panel background
+			alpha (int): Transparency level (0-255)
+		"""
 		if w_cells <= 0 or h_cells <= 0:
 			return
 		px0 = off_x + x_cells * cell_w
@@ -951,7 +1499,12 @@ def run_pygame():
 		s.fill((r, g, b, alpha))
 		screen.blit(s, (px0, py0))
 
-	def draw_message_log():
+	def draw_message_log() -> None:
+		"""Draw recent messages in bottom-left corner of screen.
+		
+		Displays up to 8 recent messages with fade effect based on age.
+		Older messages become more transparent until they disappear.
+		"""
 		# Render a small translucent panel with last few messages at bottom-left of the map viewport
 		# Make window 50% taller: from 4 to 6 lines
 		max_lines = 6
@@ -991,7 +1544,17 @@ def run_pygame():
 			return nx / length, ny / length
 		return 0.0, 0.0
 
-	def draw_minimap(surface, dungeon, explored_set, visible_set, px, py):
+	def draw_minimap(surface: pygame.Surface, dungeon: Dungeon, explored_set: set, visible_set: set, px: int, py: int) -> None:
+		"""Draw minimap with fog-of-war and current visibility.
+		
+		Args:
+			surface (pygame.Surface): Surface to draw the minimap on
+			dungeon (Dungeon): Current dungeon to map
+			explored_set (set): Set of explored tile coordinates
+			visible_set (set): Set of currently visible tiles
+			px (int): Player X coordinate
+			py (int): Player Y coordinate
+		"""
 		mm = SETTINGS.get('minimap', {}) or {}
 		if not mm.get('enabled', True):
 			return
@@ -1094,7 +1657,15 @@ def run_pygame():
 		off_y = (win_h - vh) // 2
 		return off_x, off_y
 
-	def draw_char_at(cell_x, cell_y, ch, color):
+	def draw_char_at(cell_x: int, cell_y: int, ch: str, color: tuple[int, int, int]) -> None:
+		"""Draw a character glyph at specified cell coordinates.
+		
+		Args:
+			cell_x (int): X coordinate in cell units
+			cell_y (int): Y coordinate in cell units
+			ch (str): Character to draw
+			color (tuple[int, int, int]): RGB color for the character
+		"""
 		if ch == ' ':
 			return
 		surf = render_glyph(ch, color)
@@ -1102,7 +1673,17 @@ def run_pygame():
 		gy = off_y + cell_y * cell_h + (cell_h - surf.get_height()) // 2
 		screen.blit(surf, (gx, gy))
 
-	def draw_block_at(cell_x, cell_y, color, inset=0, with_dither=True):
+	def draw_block_at(cell_x: int, cell_y: int, color: tuple[int, int, int], inset: int = 0, with_dither: bool = True, material_type: str = 'default') -> None:
+		"""Draw a colored block at specified cell coordinates.
+		
+		Args:
+			cell_x (int): X coordinate in cell units
+			cell_y (int): Y coordinate in cell units
+			color (tuple[int, int, int]): RGB color for the block
+			inset (int): Pixel inset from cell edges (creates border)
+			with_dither (bool): Whether to apply texture pattern
+			material_type (str): Type of material texture to apply
+		"""
 		# Fill a solid rectangle for the cell, optional inset for borders
 		px = off_x + cell_x * cell_w + inset
 		py = off_y + cell_y * cell_h + inset
@@ -1111,11 +1692,26 @@ def run_pygame():
 		if pw <= 0 or ph <= 0:
 			return
 		screen.fill(color, (px, py, pw, ph))
-		if with_dither and dither_pattern is not None:
-			# Overlay subtle pattern for texture
-			# Use a clipped blit to match inset
-			src = dither_pattern.subsurface((inset, inset, pw, ph)) if (inset > 0 and inset * 2 < cell_w and inset * 2 < cell_h) else dither_pattern
-			screen.blit(src, (px, py))
+		
+		if with_dither:
+			# Use material-specific texture pattern
+			pattern = texture_patterns.get(material_type, dither_pattern)
+			if pattern is not None:
+				try:
+					# Use a clipped blit to match inset, but ensure we don't exceed pattern bounds
+					if inset > 0 and inset * 2 < min(pattern.get_width(), pattern.get_height()):
+						# Create a subsurface that fits within both the pattern and target rectangle
+						clip_w = min(pw, pattern.get_width() - inset)
+						clip_h = min(ph, pattern.get_height() - inset)
+						if clip_w > 0 and clip_h > 0:
+							src = pattern.subsurface((inset, inset, clip_w, clip_h))
+							screen.blit(src, (px, py))
+					else:
+						# No inset or inset too large, use full pattern
+						screen.blit(pattern, (px, py), (0, 0, pw, ph))
+				except pygame.error:
+					# Fallback: just skip the texture if there's an issue
+					pass
 
 	def draw_overlay_at(cell_x, cell_y, color, alpha, inset=0):
 		# Alpha-blended rectangle on top of parchment/world for subtle fades
@@ -1211,7 +1807,13 @@ def run_pygame():
 			})
 		return out
 
-	def push_new_level():
+	def push_new_level() -> None:
+		"""Generate and switch to a new dungeon level.
+		
+		Saves current level state, generates new dungeon with same dimensions,
+		resets player position to first room, and updates all tracking variables.
+		Updates the global level list and switches context to new level.
+		"""
 		nonlocal dungeon, fov, explored, px, py, current_level_index
 		nonlocal mm_reveal, mm_noise, wr_reveal, wr_noise
 		nonlocal bricks_touched, total_bricks, walls_touched, floors_touched, floors_stepped, total_walls, total_floors
@@ -1219,11 +1821,38 @@ def run_pygame():
 		if levels:
 			levels[current_level_index] = snapshot_current()
 		# Create new level same size as current dungeon window
-		nd = generate_dungeon(map_w, grid_h, complexity=0.5, length=MAX_ROOMS,
-			room_min=ROOM_MIN_SIZE, room_max=ROOM_MAX_SIZE)
-		# place player
+		dungeon_params = {
+			'width': map_w,
+			'height': grid_h,
+			'complexity': SETTINGS.get('dungeon_complexity', 0.2),
+			'length': SETTINGS.get('dungeon_length', 25),
+			'room_min': SETTINGS.get('dungeon_room_min', 4),
+			'room_max': SETTINGS.get('dungeon_room_max', 9),
+			'linearity': SETTINGS.get('dungeon_linearity', 0.8),
+			'entropy': SETTINGS.get('dungeon_entropy', 0.0),
+		}
+		nd = generate_dungeon(**dungeon_params)
+		# Place player at center of first room in new level
 		if nd.rooms:
-			pxn, pyn = nd.rooms[0].center()
+			room = nd.rooms[0]
+			pxn, pyn = room.center()
+			
+			# Ensure player starts on a floor tile within the room
+			if nd.is_wall(pxn, pyn):
+				# Search for a floor tile within the room bounds
+				found = False
+				room_w = room.x2 - room.x1
+				room_h = room.y2 - room.y1
+				for dx in range(-(room_w//2), room_w//2 + 1):
+					for dy in range(-(room_h//2), room_h//2 + 1):
+						x, y = pxn + dx, pyn + dy
+						if (room.x1 < x < room.x2 - 1 and room.y1 < y < room.y2 - 1 and 
+							not nd.is_wall(x, y)):
+							pxn, pyn = x, y
+							found = True
+							break
+					if found:
+						break
 		else:
 			pxn, pyn = 1, 1
 		# switch to new level
@@ -1373,6 +2002,7 @@ def run_pygame():
 					draw_text_line(x0 + 3, y0 + box_h - 3, "Enter: Load | Esc: Back", dim_col)
 
 	running = True
+	frame_count = 0
 	while running:
 		# Input
 		for event in pygame.event.get():
@@ -1619,6 +2249,7 @@ def run_pygame():
 					dy = -1
 				elif event.key == pygame.K_s:
 					dy = 1
+			
 				elif event.key == pygame.K_a:
 					dx = -1
 				elif event.key == pygame.K_d:
@@ -1636,9 +2267,9 @@ def run_pygame():
 
 		# Update visibility after input
 		if debug_show_all_visible:
-			visible = {(x, y): 0.0 for x in range(dungeon.w) for y in range(dungeon.h)}
+			visible = {(x, y) for x in range(dungeon.w) for y in range(dungeon.h)}
 		else:
-			visible = fov.compute(px, py, light_radius)
+			visible = fov.compute(px, py, max(1, int(light_radius - 0.5)))  # Slightly smaller visibility radius
 
 		# Animate minimap reveal
 		dt = clock.get_time() / 1000.0
@@ -1672,7 +2303,7 @@ def run_pygame():
 		if render_mode == 'blocks':
 			border_base = scale_color(WALL_LIGHT, 0.95)
 			border_shadow = scale_color(INK_DARK, 0.6)
-			border_high = MARBLE_WHITE if 'MARBLE_WHITE' in globals() else (220, 220, 228)
+			border_high = MARBLE_WHITE
 			for sy in range(view_h):
 				cx = BORDER_COL
 				cy = sy
@@ -1704,18 +2335,72 @@ def run_pygame():
 				draw_ch = ' '
 				color = INK_DARK
 				block_color = None
+				mat = MAT_BRICK  # Default material for out-of-bounds areas
 				if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h:
 					# In-bounds tiles
 					tile = dungeon.tiles[wx][wy]
 					mat = dungeon.materials[wx][wy]
 					world_pos = (wx, wy)
+					
 					if world_pos in visible:
 						explored.add(world_pos)
-						d = visible[world_pos]
-						tval = 1.0 - (d / max(1e-6, light_radius))
-						tval = clamp(tval, 0.0, 1.0)
-						# Base lit color
-						color = lit_color_for_material(mat, tval)
+						# Calculate distance from player for lighting
+						dx = wx - px
+						dy = wy - py
+						d = math.sqrt(dx * dx + dy * dy)
+						
+						# Stronger falloff: quadratic for more dramatic lighting
+						if d <= 1.0:
+							# Immediate vicinity gets full brightness
+							tval = 1.0
+						else:
+							# Quadratic falloff for distance > 1
+							normalized_distance = d / light_radius
+							tval = max(0.1, 1.0 - (normalized_distance * normalized_distance))  # Minimum brightness of 0.1
+						
+						# Get material-specific character and color
+						is_wall = (tile == TILE_WALL)
+						is_door = (tile == TILE_DOOR)
+						
+						if is_door:
+							# Doors get special rendering
+							door_state = dungeon.doors[wx][wy] if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h else -1
+							if door_state == DOOR_OPEN:
+								draw_ch = "'"  # Open door
+								base_color = (120, 80, 50)  # Medium brown
+							elif door_state == DOOR_LOCKED:
+								draw_ch = "+"  # Locked door (solid)
+								base_color = (80, 50, 30)   # Dark brown
+							else:  # DOOR_CLOSED or default
+								draw_ch = "+"  # Closed door
+								base_color = (100, 65, 40)  # Brown
+						else:
+							draw_ch, base_color = get_material_ascii_char_and_color(mat, is_wall)
+						
+						# Ensure floors don't render characters
+						if tile == TILE_FLOOR:
+							draw_ch = ' '
+						
+						# Apply lighting to the material color
+						color = scale_color(base_color, tval)
+						
+						# Enhanced directional boost for walls: stronger effect
+						if tile == TILE_WALL:
+							wnx, wny = wall_normal(dungeon, wx, wy)
+							# Light vector from tile to player (toward the light source)
+							lx = px - wx
+							ly = py - wy
+							llen = math.hypot(lx, ly)
+							if llen > 1e-6:
+								lx /= llen
+								ly /= llen
+							# Only apply if we have a meaningful normal
+							ndotl = max(0.0, wnx * lx + wny * ly)
+							if ndotl > 0.0:
+								# Stronger boost for walls facing the player
+								boost = 0.5 * ndotl * tval  # Scale by distance too
+								color = scale_color(color, 1.0 + boost)
+						
 						# Track exploration metrics when a tile becomes visible
 						# - Brick-specific subset
 						if tile == TILE_WALL and mat == MAT_BRICK:
@@ -1733,35 +2418,69 @@ def run_pygame():
 										break
 						else:
 							floors_touched.add((wx, wy))
-						# Directional boost for walls: Lambertian with normal toward open space
-						if tile == TILE_WALL:
-							wnx, wny = wall_normal(dungeon, wx, wy)
-							# Light vector from tile to player (toward the light source)
-							lx = px - wx
-							ly = py - wy
-							llen = math.hypot(lx, ly)
-							if llen > 1e-6:
-								lx /= llen
-								ly /= llen
-							# Only apply if we have a meaningful normal
-							ndotl = max(0.0, wnx * lx + wny * ly)
-							if ndotl > 0.0:
-								boost = 0.25 * ndotl  # subtle boost
-								color = scale_color(color, 1.0 + boost)
-						draw_ch = WALL_CH if tile == TILE_WALL else ' '
+						
 						block_color = color
-					# Explored but not currently visible: dimmed FoW rendering
+					# Explored but not currently visible: dimmed FoW rendering with INVERTED lighting
 					elif (wx, wy) in explored:
 						prog = wr_reveal[wx][wy]
 						noi = wr_noise[wx][wy]
 						alpha = clamp(pow(clamp(prog + noi, 0.0, 1.0), 1.8), 0.0, 1.0)
-						color = dimmed_color_for_material(mat, alpha)
-						draw_ch = WALL_CH if tile == TILE_WALL else ' '
+						
+						# Calculate distance for INVERTED lighting in FoW
+						dx = wx - px
+						dy = wy - py
+						d = math.sqrt(dx * dx + dy * dy)
+						
+						# INVERTED lighting: distant areas are brighter in FoW
+						if d <= 1.0:
+							# Areas immediately next to player are darkest in FoW
+							fow_brightness = 0.2
+						else:
+							# Distant areas get progressively brighter, maxing at edge of light radius
+							normalized_distance = min(d / light_radius, 1.0)
+							fow_brightness = 0.2 + (0.6 * normalized_distance)  # Range: 0.2 to 0.8
+						
+						# Get material-specific character and color for FOG OF WAR
+						is_wall = (tile == TILE_WALL)
+						is_door = (tile == TILE_DOOR)
+						
+						if is_door:
+							# Doors in fog of war
+							door_state = dungeon.doors[wx][wy] if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h else -1
+							if door_state == DOOR_OPEN:
+								draw_ch = "'"  # Open door
+								base_color = (120, 80, 50)  # Medium brown
+							elif door_state == DOOR_LOCKED:
+								draw_ch = "+"  # Locked door (solid)
+								base_color = (80, 50, 30)   # Dark brown
+							else:  # DOOR_CLOSED or default
+								draw_ch = "+"  # Closed door
+								base_color = (100, 65, 40)  # Brown
+						else:
+							draw_ch, base_color = get_material_ascii_char_and_color(mat, is_wall)
+						
+						if is_wall:
+							# FoW walls: Use denser character and apply inverted lighting
+							draw_ch = '▓'  # Dense dither for FoW walls
+							color = scale_color(base_color, fow_brightness)
+						elif is_door:
+							# FoW doors: Keep door character but dim the color
+							color = scale_color(base_color, fow_brightness)
+						else:
+							# FoW floors: Use blank space (invisible, blends with parchment)
+							draw_ch = ' '  # Blank for FoW floors (invisible, blends with parchment)
+							floor_brightness = fow_brightness * 0.7  # Make floors darker than walls
+							color = scale_color(base_color, floor_brightness)
+						
+						# Ensure floors don't render characters
+						if tile == TILE_FLOOR:
+							draw_ch = ' '
 						block_color = color
 				# else: out-of-bounds rendering
 				else:
-					# Leave parchment visible; draw nothing out-of-bounds
+					# DARKNESS: Unexplored areas - leave as pure parchment (no character)
 					draw_ch = ' '
+					block_color = None
 
 				# Render according to mode
 				if render_mode == 'blocks':
@@ -1771,7 +2490,9 @@ def run_pygame():
 						cell_y = sy
 						# Slight inset for crisp borders
 						inset = 1
-						draw_block_at(cell_x, cell_y, block_color, inset=inset, with_dither=True)
+						# Use material-specific texture
+						material_texture_name = get_material_texture_name(mat)
+						draw_block_at(cell_x, cell_y, block_color, inset=inset, with_dither=True, material_type=material_texture_name)
 				else:
 					if draw_ch != ' ':
 						surf = render_glyph(draw_ch, color)
@@ -1780,8 +2501,8 @@ def run_pygame():
 						screen.blit(surf, (gx, gy))
 
 		# Draw player at the center of the viewport
-		pcx = clamp(view_w // 2, 0, view_w - 1)
-		pcy = clamp(view_h // 2, 0, view_h - 1)
+		pcx = int(clamp(view_w // 2, 0, view_w - 1))
+		pcy = int(clamp(view_h // 2, 0, view_h - 1))
 		if render_mode == 'blocks':
 			# Player as a colored block with a thin outline
 			cell_x = UI_COLS + 1 + pcx
@@ -1854,6 +2575,30 @@ def run_pygame():
 			draw_text_line(0,12, "P Stamp"[:UI_COLS], ui_color, UI_COLS)
 			draw_text_line(0,13, "Ctrl+D dbg"[:UI_COLS], ui_color, UI_COLS)
 
+			door_counts = count_doors(dungeon)
+			debug_text = [
+				f"Player: ({px}, {py})",
+				f"Level: {current_level_index + 1}",
+				f"Size: {dungeon.w}x{dungeon.h}",
+				"---",
+				"Doors:",
+				f"  Total: {door_counts['total']}",
+				f"  Open: {door_counts['open']}",
+				f"  Closed: {door_counts['closed']}",
+				f"  Locked: {door_counts['locked']}",
+				f"  Unlocked: {door_counts['unlocked']}",
+				"---",
+				"Commands:",
+				"  R: Reveal/Unreveal",
+				"  L: Level up",
+				"  K: Level down",
+				"  P: Regen level",
+				"  S: Save session",
+				"  O: Load session",
+			]
+			for i, line in enumerate(debug_text):
+				draw_text_line(0, 14 + i, line, ui_color, UI_COLS)
+
 		# Minimap (after UI/world)
 		if not menu_open:
 			draw_minimap(screen, dungeon, explored, visible, px, py)
@@ -1864,6 +2609,34 @@ def run_pygame():
 
 		pygame.display.flip()
 		clock.tick(FPS)
+		frame_count += 1
+
+
+def count_doors(dungeon):
+    """Counts doors by state in the given dungeon."""
+    total = 0
+    closed = 0
+    open_doors = 0
+    locked = 0
+    for y in range(dungeon.h):
+        for x in range(dungeon.w):
+            door_state = dungeon.doors[x][y]
+            if door_state != -1:
+                total += 1
+                if door_state == DOOR_CLOSED:
+                    closed += 1
+                elif door_state == DOOR_OPEN:
+                    open_doors += 1
+                elif door_state == DOOR_LOCKED:
+                    locked += 1
+    unlocked = total - locked
+    return {
+        "total": total,
+        "closed": closed,
+        "open": open_doors,
+        "locked": locked,
+        "unlocked": unlocked,
+    }
 
 
 def main():
