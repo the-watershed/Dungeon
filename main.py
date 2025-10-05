@@ -199,17 +199,17 @@ def dimmed_color_for_material(mat: int, alpha: float) -> tuple[int, int, int]:
 			float: Scaling factor for color brightness in fog-of-war
 		"""
 		a = clamp(a, 0.0, 1.0)
-		# Very dark for walls/iron bars
+		# Nearly black for walls/iron bars (very dark FoW)
 		if m == MAT_BRICK or m == MAT_IRON:
-			s_min, s_max = 0.10, 0.22
+			s_min, s_max = 0.03, 0.10
 		elif m == MAT_WATER:
-			s_min, s_max = 0.12, 0.28
+			s_min, s_max = 0.04, 0.12
 		elif m in (MAT_LAVA, MAT_MARBLE, MAT_WOOD, MAT_SAND, MAT_MOSS, MAT_DIRT, MAT_GRASS):
-			# Non-wall surfaces (treat like floors)
-			s_min, s_max = 0.28, 0.45
+			# Non-wall surfaces (treat like floors, very dark FoW)
+			s_min, s_max = 0.12, 0.22
 		else:
-			# Default floors (e.g., cobble)
-			s_min, s_max = 0.28, 0.45
+			# Default floors (e.g., cobble, very dark FoW)
+			s_min, s_max = 0.12, 0.22
 		return s_min + a * (s_max - s_min)
 
 	scale = fow_scale_for_material(mat, alpha)
@@ -1044,6 +1044,21 @@ def run_pygame():
 		print("Pygame is required for the windowed mode. Install with: pip install pygame")
 		raise
 
+	# Launch character creator at startup
+	player_character = None
+	try:
+		from char_gui import run_character_creator
+		player_character = run_character_creator()
+		if not player_character:
+			print("Character creation cancelled. Exiting game.")
+			return
+		print(f"Welcome, {player_character.name}! Starting your adventure...")
+	except Exception as e:
+		print(f"Error launching character creator: {e}")
+		import traceback
+		traceback.print_exc()
+		print("Starting game without character...")
+
 	random.seed()
 
 	# Initial window and grid
@@ -1179,6 +1194,10 @@ def run_pygame():
 		font_file = (SETTINGS.get('font_file') or '').strip()
 		font_name = (SETTINGS.get('font_name') or '').strip()
 		candidates = []
+		# Always prioritize Blocky Sketch.ttf
+		blocky_sketch_path = os.path.join(os.path.dirname(__file__), "Blocky Sketch.ttf")
+		if os.path.isfile(blocky_sketch_path):
+			candidates.append(("file", blocky_sketch_path))
 		if font_file:
 			path = os.path.join(os.path.dirname(__file__), font_file)
 			if os.path.isfile(path):
@@ -1237,14 +1256,19 @@ def run_pygame():
 			return surf
 		return render_glyph
 
+	# Build fonts: regular for map, larger for UI panel
 	font = build_font(cell_h)
+	ui_font = build_font(int(cell_h * 1.5))  # 1.5x larger for UI readability
 
 	# Build parchment background via renderer module (static, no animation). Disable vignette to avoid concentric rings.
-	parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False)
+	# Use cell_w as grain_tile to align texture pattern with character grid
+	parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False, grain_tile=cell_w)
 	parchment_renderer.build_layers(win_w, win_h)
 	parchment_static = parchment_renderer.generate(win_w, win_h)
+	# Build glyph renderers for both fonts
 	# render_glyph: type ignore to work around nested function type inference issue
 	render_glyph = build_glyph_cache(font)  # type: ignore
+	render_ui_glyph = build_glyph_cache(ui_font)  # type: ignore
 
 	# Prebuild texture patterns for different materials
 	def build_material_texture(w, h, material_type):
@@ -1600,20 +1624,38 @@ def run_pygame():
 			pygame.draw.rect(surface, inner, (left_x, sy_px, stud_w, stud_h))
 			pygame.draw.rect(surface, inner, (right_x, sy_px, stud_w, stud_h))
 
-		# Colors for minimap (use materials). Match FoW separation used in world.
+		# Colors for minimap - use same lighting and colors as main game view
 		def mini_color(x, y, visible_now, alpha_reveal):
 			if 0 <= x < dungeon.w and 0 <= y < dungeon.h:
 				m = dungeon.materials[x][y]
-				base = base_color_for_material(m)
+				tile = dungeon.tiles[x][y]
+				is_wall = (tile == TILE_WALL)
+				
+				# Get same base color as main game (respects wall vs floor distinction)
+				_, base = get_material_ascii_char_and_color(m, is_wall)
+				
 				if visible_now:
-					return base
-				# FoW: darker walls vs lighter floors
+					# Calculate lighting same as main game view
+					dx = x - px
+					dy = y - py
+					d = math.sqrt(dx * dx + dy * dy)
+					
+					# Same lighting calculation as main game
+					if d <= 1.0:
+						tval = 1.0
+					else:
+						normalized_distance = d / light_radius
+						tval = max(0.1, 1.0 - (normalized_distance * normalized_distance))
+					
+					# Apply lighting to base color (same as main game)
+					return scale_color(base, tval)
+				# FoW: much darker walls vs darker floors (match main game)
 				def fow_scale_for_material(m2: int, a: float) -> float:
 					a = clamp(a, 0.0, 1.0)
 					if m2 == MAT_BRICK or m2 == MAT_IRON:
-						s_min, s_max = 0.12, 0.24
+						s_min, s_max = 0.06, 0.15
 					else:
-						s_min, s_max = 0.30, 0.50
+						s_min, s_max = 0.15, 0.30
 					return s_min + a * (s_max - s_min)
 				s = fow_scale_for_material(m, alpha_reveal)
 				return scale_color(base, s)
@@ -1657,7 +1699,7 @@ def run_pygame():
 		off_y = (win_h - vh) // 2
 		return off_x, off_y
 
-	def draw_char_at(cell_x: int, cell_y: int, ch: str, color: tuple[int, int, int]) -> None:
+	def draw_char_at(cell_x: int, cell_y: int, ch: str, color: tuple[int, int, int], use_ui_font: bool = False) -> None:
 		"""Draw a character glyph at specified cell coordinates.
 		
 		Args:
@@ -1665,10 +1707,11 @@ def run_pygame():
 			cell_y (int): Y coordinate in cell units
 			ch (str): Character to draw
 			color (tuple[int, int, int]): RGB color for the character
+			use_ui_font (bool): If True, use larger UI font instead of map font
 		"""
 		if ch == ' ':
 			return
-		surf = render_glyph(ch, color)
+		surf = render_ui_glyph(ch, color) if use_ui_font else render_glyph(ch, color)
 		gx = off_x + cell_x * cell_w + (cell_w - surf.get_width()) // 2
 		gy = off_y + cell_y * cell_h + (cell_h - surf.get_height()) // 2
 		screen.blit(surf, (gx, gy))
@@ -1745,11 +1788,11 @@ def run_pygame():
 			s.fill((r, g, b, int(255 * clamp(alpha, 0.0, 1.0))))
 			screen.blit(s, (px, py))
 
-	def draw_text_line(cell_x, cell_y, text, color=(180, 180, 180), max_len=None):
+	def draw_text_line(cell_x, cell_y, text, color=(180, 180, 180), max_len=None, use_ui_font=False):
 		if max_len is None:
 			max_len = len(text)
 		for i, ch in enumerate(text[:max_len]):
-			draw_char_at(cell_x + i, cell_y, ch, color)
+			draw_char_at(cell_x + i, cell_y, ch, color, use_ui_font=use_ui_font)
 
 	# Session state: multi-level support
 	levels = []  # list of dicts: dungeon/explored/player + touched/totals for bricks, walls, floors
@@ -1912,8 +1955,12 @@ def run_pygame():
 		floors_stepped.add((px, py))
 		levels[current_level_index]['floors_stepped'] = floors_stepped
 
-	# Welcome message
-	add_message("Welcome to the dungeon.")
+	# Welcome message with character name
+	if player_character:
+		add_message(f"Welcome, {player_character.name} the {player_character.race} {player_character.char_class}!")
+		add_message(f"HP: {player_character.current_hp}/{player_character.max_hp}, AC: {player_character.armor_class}")
+	else:
+		add_message("Welcome to the dungeon.")
 
 	# Menu state
 	menu_open = False
@@ -1976,7 +2023,7 @@ def run_pygame():
 				draw_text_line(x0 + 3, y0 + ystart + i, line, col, box_w - 6)
 
 		if menu_mode == 'main':
-			options = ["Settings", "Save", "Load", "Quit"]
+			options = ["Character Creator", "Settings", "Save", "Load", "Quit"]
 			draw_opts(options, menu_index, 6)
 		elif menu_mode == 'settings':
 			hud = "On" if SETTINGS.get('hud_text', True) else "Off"
@@ -2126,21 +2173,38 @@ def run_pygame():
 					# Menu navigation
 					if menu_mode == 'main':
 						if event.key in (pygame.K_w, pygame.K_UP):
-							menu_index = (menu_index - 1) % 4
+							menu_index = (menu_index - 1) % 5
 						elif event.key in (pygame.K_s, pygame.K_DOWN):
-							menu_index = (menu_index + 1) % 4
+							menu_index = (menu_index + 1) % 5
 						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-							if menu_index == 0:  # Settings
+							if menu_index == 0:  # Character Creator
+								# Launch character creator GUI
+								menu_open = False
+								try:
+									from char_gui import run_character_creator
+									created_char = run_character_creator()
+									if created_char:
+										# Load character stats into game
+										player_character = created_char
+										add_message(f"Welcome, {created_char.name} the {created_char.race} {created_char.char_class}!")
+										add_message(f"HP: {created_char.current_hp}/{created_char.max_hp}, AC: {created_char.armor_class}")
+									else:
+										add_message("Character creation cancelled.")
+								except Exception as e:
+									add_message(f"Error in Character Creator: {e}")
+									import traceback
+									traceback.print_exc()
+							elif menu_index == 1:  # Settings
 								menu_mode = 'settings'
 								menu_index = 0
-							elif menu_index == 1:  # Save
+							elif menu_index == 2:  # Save
 								menu_mode = 'save'
 								save_name = ""
-							elif menu_index == 2:  # Load
+							elif menu_index == 3:  # Load
 								menu_mode = 'load'
 								load_names = list_saves()
 								load_index = 0
-							elif menu_index == 3:  # Quit
+							elif menu_index == 4:  # Quit
 								running = False
 					elif menu_mode == 'settings':
 						if event.key in (pygame.K_w, pygame.K_UP):
@@ -2431,14 +2495,14 @@ def run_pygame():
 						dy = wy - py
 						d = math.sqrt(dx * dx + dy * dy)
 						
-						# INVERTED lighting: distant areas are brighter in FoW
+						# INVERTED lighting: distant areas are brighter in FoW (darker overall)
 						if d <= 1.0:
 							# Areas immediately next to player are darkest in FoW
-							fow_brightness = 0.2
+							fow_brightness = 0.08
 						else:
 							# Distant areas get progressively brighter, maxing at edge of light radius
 							normalized_distance = min(d / light_radius, 1.0)
-							fow_brightness = 0.2 + (0.6 * normalized_distance)  # Range: 0.2 to 0.8
+							fow_brightness = 0.08 + (0.22 * normalized_distance)  # Range: 0.08 to 0.30
 						
 						# Get material-specific character and color for FOG OF WAR
 						is_wall = (tile == TILE_WALL)
@@ -2469,7 +2533,7 @@ def run_pygame():
 						else:
 							# FoW floors: Use blank space (invisible, blends with parchment)
 							draw_ch = ' '  # Blank for FoW floors (invisible, blends with parchment)
-							floor_brightness = fow_brightness * 0.7  # Make floors darker than walls
+							floor_brightness = fow_brightness * 0.5  # Make floors much darker than walls
 							color = scale_color(base_color, floor_brightness)
 						
 						# Ensure floors don't render characters
@@ -2532,31 +2596,114 @@ def run_pygame():
 			draw_message_log()
 
 		# UI panel content (draw after world so it overlays if needed)
-		# Simple sample stats
+		# Enhanced organized UI with sections
 		ui_color = scale_color(WALL_LIGHT, 0.95)
-		title = "== STATUS =="
-		draw_text_line(0, 0, title[:UI_COLS], scale_color(WALL_LIGHT, 1.0), UI_COLS)
-		draw_text_line(0, 2, f"Pos:{px:02d},{py:02d}"[:UI_COLS], ui_color, UI_COLS)
-		draw_text_line(0, 3, f"Size:{dungeon.w:02d}x{dungeon.h:02d}"[:UI_COLS], ui_color, UI_COLS)
-		draw_text_line(0, 4, f"Light:{light_radius:02d}"[:UI_COLS], ui_color, UI_COLS)
+		section_color = scale_color(WALL_LIGHT, 1.0)
+		dim_color = scale_color(WALL_LIGHT, 0.7)
+		
+		line_y = 0
+		
+		if player_character:
+			# === CHARACTER SECTION ===
+			draw_text_line(0, line_y, "== CHARACTER =="[:UI_COLS], section_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			name_short = player_character.name[:UI_COLS]
+			draw_text_line(0, line_y, name_short, section_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			race_class = f"{player_character.race} {player_character.char_class}"[:UI_COLS]
+			draw_text_line(0, line_y, race_class, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			level_xp = f"Level 1  XP:{player_character.xp}"[:UI_COLS]
+			draw_text_line(0, line_y, level_xp, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "-"*UI_COLS, dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			
+			# === VITALS SECTION ===
+			hp_text = f"HP: {player_character.current_hp}/{player_character.max_hp}"[:UI_COLS]
+			draw_text_line(0, line_y, hp_text, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			ac_text = f"AC: {player_character.armor_class}"[:UI_COLS]
+			draw_text_line(0, line_y, ac_text, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			thac0_text = f"THAC0: {player_character.thac0}"[:UI_COLS]
+			draw_text_line(0, line_y, thac0_text, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "-"*UI_COLS, dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			
+			# === ATTRIBUTES SECTION ===
+			draw_text_line(0, line_y, "STR DEX CON"[:UI_COLS], dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			stats = f"{player_character.strength:>3} {player_character.dexterity:>3} {player_character.constitution:>3}"[:UI_COLS]
+			draw_text_line(0, line_y, stats, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "INT WIS CHA"[:UI_COLS], dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			stats2 = f"{player_character.intelligence:>3} {player_character.wisdom:>3} {player_character.charisma:>3}"[:UI_COLS]
+			draw_text_line(0, line_y, stats2, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "-"*UI_COLS, dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			
+			# === INVENTORY/GOLD ===
+			gold_text = f"Gold: {player_character.gold}gp"[:UI_COLS]
+			draw_text_line(0, line_y, gold_text, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			equip_count = len(player_character.equipment) if hasattr(player_character, 'equipment') else 0
+			inv_text = f"Items: {equip_count}"[:UI_COLS]
+			draw_text_line(0, line_y, inv_text, ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "-"*UI_COLS, dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+		else:
+			# === BASIC INFO (no character) ===
+			draw_text_line(0, line_y, "== EXPLORER =="[:UI_COLS], section_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, f"Pos: ({px},{py})"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, f"Dungeon: {dungeon.w}x{dungeon.h}"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, f"Light: {light_radius}"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "-"*UI_COLS, dim_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+		
+		# === DUNGEON INFO SECTION ===
+		draw_text_line(0, line_y, "== DUNGEON =="[:UI_COLS], section_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		draw_text_line(0, line_y, f"Level: {current_level_index + 1}"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		
 		# Exploration percent: floors stepped + exposed brick walls illuminated
-		# Compute exposed bricks total (adjacent to reachable floors) each frame
 		exposed_bricks_total = count_total_exposed_bricks(dungeon, reachable_this_frame)
 		floors_total = max(0, total_floors or 0)
 		combined_total = max(1, floors_total + exposed_bricks_total)
-		# Count exposed bricks that have actually been illuminated (in bricks_touched)
 		exposed_bricks_touched = count_exposed_bricks_touched(dungeon, bricks_touched, reachable_this_frame)
 		combined_touched = len(floors_stepped)
-		# Floors stepped cannot exceed floors_total; cap now to avoid overshoot if reconciliation lags in edge cases
 		combined_touched = min(combined_touched, floors_total)
 		combined_touched += min(exposed_bricks_touched, exposed_bricks_total)
 		ratio = 0.0 if combined_total <= 0 else (combined_touched / combined_total)
 		ratio = max(0.0, min(1.0, ratio))
 		pct = int(round(ratio * 100))
-		# Safety: if some exposed bricks not yet touched but rounding gave 100%, clamp to 99
 		if exposed_bricks_touched < exposed_bricks_total and pct == 100:
 			pct = 99
-		draw_text_line(0, 5, f"Explored:{pct:3d}%"[:UI_COLS], ui_color, UI_COLS)
+		draw_text_line(0, line_y, f"Explored: {pct}%"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		draw_text_line(0, line_y, "-"*UI_COLS, dim_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		
+		# === SHORTCUTS SECTION ===
+		draw_text_line(0, line_y, "== SHORTCUTS =="[:UI_COLS], section_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		draw_text_line(0, line_y, "I: Inventory"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		draw_text_line(0, line_y, "C: Character"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		draw_text_line(0, line_y, "M: Map"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+		line_y += 1
+		draw_text_line(0, line_y, "Esc: Menu"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+		line_y += 1
 
 		# Milestone messages for combined exploration
 		for threshold in (25, 50, 75, 100):
@@ -2566,14 +2713,22 @@ def run_pygame():
 
 		# Debug UI pane additions
 		if debug_mode:
-			draw_text_line(0, 6, "== DEBUG =="[:UI_COLS], scale_color(WALL_LIGHT, 1.0), UI_COLS)
-			draw_text_line(0, 7, f"F1 Vis:{'On' if debug_show_all_visible else 'Off'}"[:UI_COLS], ui_color, UI_COLS)
-			draw_text_line(0, 8, "F2 Reveal"[:UI_COLS], ui_color, UI_COLS)
-			draw_text_line(0, 9, f"F3 Clip:{'Off' if debug_noclip else 'On'}"[:UI_COLS], ui_color, UI_COLS)
-			draw_text_line(0,10, "F4/F5 Lr"[:UI_COLS], ui_color, UI_COLS)
-			draw_text_line(0,11, "N NewLvl"[:UI_COLS], ui_color, UI_COLS)
-			draw_text_line(0,12, "P Stamp"[:UI_COLS], ui_color, UI_COLS)
-			draw_text_line(0,13, "Ctrl+D dbg"[:UI_COLS], ui_color, UI_COLS)
+			line_y += 1
+			draw_text_line(0, line_y, "== DEBUG =="[:UI_COLS], scale_color(WALL_LIGHT, 1.0), UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, f"F1 Vis:{'On' if debug_show_all_visible else 'Off'}"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "F2 Reveal"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, f"F3 Clip:{'Off' if debug_noclip else 'On'}"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "F4/F5 Lr"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "N NewLvl"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "P Stamp"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
+			line_y += 1
+			draw_text_line(0, line_y, "Ctrl+D dbg"[:UI_COLS], ui_color, UI_COLS, use_ui_font=True)
 
 			door_counts = count_doors(dungeon)
 			debug_text = [
@@ -2597,7 +2752,7 @@ def run_pygame():
 				"  O: Load session",
 			]
 			for i, line in enumerate(debug_text):
-				draw_text_line(0, 14 + i, line, ui_color, UI_COLS)
+				draw_text_line(0, 14 + i, line, ui_color, UI_COLS, use_ui_font=True)
 
 		# Minimap (after UI/world)
 		if not menu_open:

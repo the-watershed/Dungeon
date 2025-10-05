@@ -1,12 +1,22 @@
 # ASCII Dungeon Crawler
 
-A top-down, grid-based dungeon crawler rendered with ASCII characters.
+A top-down, grid-based dungeon crawler with AD&D 2nd Edition character creation.
 
+## Features
+- ASCII art rendering with lighting and shadows
+- Field-of-view (shadowcasting) with brightness falloff
+- **AD&D 2nd Edition Character Creator** - Full character creation with races, classes, equipment
+- Procedurally generated dungeons with rooms and corridors
+- Door system at room entrances
+- Save/Load game system
+- Character stats tracking and display
+
+## Game Elements
 - `#` walls
 - space ` ` floor
 - `@` player
-- Per-tile lighting using field-of-view (shadowcasting) with brightness falloff
-- WASD movement, `Q` or `Esc` to quit
+- `+` doors
+- WASD movement, `Q` or `Esc` for menu
 
 Two renderers are supported:
 - Pygame windowed mode (default): 1600x1200 window, 80x40 character grid
@@ -62,6 +72,32 @@ Configure via `settings.json`:
 
 - Visible tiles: bright gray, walls slightly brighter
 - Explored (not currently visible): dark gray
+
+## Character Creator
+
+**The character creator launches automatically when you start the game!** You can create a new character or load an existing one before entering the dungeon.
+
+You can also access it in-game by pressing `Esc` or `Q` to open the menu and selecting "Character Creator".
+
+**Character Creation Process:**
+1. Choose race (Human, Elf, Dwarf, Halfling, Half-Elf, Gnome, Half-Orc)
+2. Roll ability scores (4d6 drop lowest)
+3. Choose class (Fighter, Mage, Cleric, Thief, Ranger, Paladin, Druid, Bard)
+4. Choose alignment (9 alignments from Lawful Good to Chaotic Evil)
+5. Purchase equipment with starting gold
+6. Name your character
+7. Review and save
+
+**Character Stats Displayed:**
+- Name, Race, Class
+- HP (Hit Points)
+- AC (Armor Class) and THAC0 (attack bonus)
+- Six ability scores (STR, DEX, CON, INT, WIS, CHA)
+- Gold
+
+Characters are saved to `saves/<name>.json` and can be loaded later.
+
+For more details, see [CHARACTER_INTEGRATION.md](CHARACTER_INTEGRATION.md)
 - Unseen: black
 - Player: red square
 
