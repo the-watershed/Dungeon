@@ -1,0 +1,545 @@
+{
+	"a_team_theme": {
+		"title": "The A-Team Theme",
+		"tempo": 150,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Bass Line",
+				"instrument": 33,
+				"channel": 0,
+				"notes": [
+					{"pitch": 41, "start": 0.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 0.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 1.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 43, "start": 1.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 2.0, "duration": 1.0, "velocity": 90},
+					
+					{"pitch": 41, "start": 4.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 4.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 5.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 43, "start": 5.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 6.0, "duration": 1.0, "velocity": 90},
+					
+					{"pitch": 41, "start": 8.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 8.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 9.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 43, "start": 9.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 10.0, "duration": 1.0, "velocity": 90},
+					
+					{"pitch": 41, "start": 12.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 12.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 13.0, "duration": 0.5, "velocity": 90},
+					{"pitch": 43, "start": 13.5, "duration": 0.5, "velocity": 90},
+					{"pitch": 41, "start": 14.0, "duration": 2.0, "velocity": 90}
+				]
+			},
+			{
+				"name": "Lead Synth",
+				"instrument": 81,
+				"channel": 1,
+				"notes": [
+					{"pitch": 65, "start": 0.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 68, "start": 0.25, "duration": 0.25, "velocity": 100},
+					{"pitch": 65, "start": 0.5, "duration": 0.25, "velocity": 100},
+					{"pitch": 68, "start": 0.75, "duration": 0.25, "velocity": 100},
+					{"pitch": 65, "start": 1.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 70, "start": 1.25, "duration": 0.25, "velocity": 100},
+					{"pitch": 68, "start": 1.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 65, "start": 2.0, "duration": 1.0, "velocity": 100},
+					
+					{"pitch": 65, "start": 4.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 68, "start": 4.25, "duration": 0.25, "velocity": 100},
+					{"pitch": 65, "start": 4.5, "duration": 0.25, "velocity": 100},
+					{"pitch": 68, "start": 4.75, "duration": 0.25, "velocity": 100},
+					{"pitch": 65, "start": 5.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 70, "start": 5.25, "duration": 0.25, "velocity": 100},
+					{"pitch": 68, "start": 5.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 65, "start": 6.0, "duration": 1.0, "velocity": 100},
+					
+					{"pitch": 73, "start": 8.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 72, "start": 8.25, "duration": 0.25, "velocity": 110},
+					{"pitch": 70, "start": 8.5, "duration": 0.25, "velocity": 110},
+					{"pitch": 68, "start": 8.75, "duration": 0.25, "velocity": 110},
+					{"pitch": 70, "start": 9.0, "duration": 0.5, "velocity": 110},
+					{"pitch": 68, "start": 9.5, "duration": 0.5, "velocity": 110},
+					{"pitch": 65, "start": 10.0, "duration": 2.0, "velocity": 110},
+					
+					{"pitch": 68, "start": 12.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 70, "start": 12.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 72, "start": 13.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 73, "start": 13.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 77, "start": 14.0, "duration": 2.0, "velocity": 110}
+				]
+			},
+			{
+				"name": "Drums",
+				"instrument": 0,
+				"channel": 9,
+				"notes": [
+					{"pitch": 36, "start": 0.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 1.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 2.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 3.0, "duration": 0.25, "velocity": 90},
+					
+					{"pitch": 36, "start": 4.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 5.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 6.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 7.0, "duration": 0.25, "velocity": 90},
+					
+					{"pitch": 36, "start": 8.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 9.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 10.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 11.0, "duration": 0.25, "velocity": 90},
+					
+					{"pitch": 36, "start": 12.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 13.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 14.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 15.0, "duration": 0.25, "velocity": 90},
+					
+					{"pitch": 42, "start": 0.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 0.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 1.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 1.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 2.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 2.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 3.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 3.5, "duration": 0.25, "velocity": 70},
+					
+					{"pitch": 42, "start": 4.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 4.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 5.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 5.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 6.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 6.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 7.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 7.5, "duration": 0.25, "velocity": 70},
+					
+					{"pitch": 42, "start": 8.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 8.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 9.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 9.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 10.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 10.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 11.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 11.5, "duration": 0.25, "velocity": 70},
+					
+					{"pitch": 42, "start": 12.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 12.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 13.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 13.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 14.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 14.5, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 15.0, "duration": 0.25, "velocity": 70},
+					{"pitch": 42, "start": 15.5, "duration": 0.25, "velocity": 70}
+				]
+			}
+		]
+	},
+	"tavern_rest": {
+		"title": "Tavern Rest",
+		"tempo": 100,
+		"time_signature": [3, 4],
+		"tracks": [
+			{
+				"name": "Lute Melody",
+				"instrument": 24,
+				"channel": 0,
+				"notes": [
+					{"pitch": 62, "start": 0.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 64, "start": 1.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 65, "start": 2.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 67, "start": 3.0, "duration": 1.5, "velocity": 85},
+					{"pitch": 65, "start": 4.5, "duration": 0.5, "velocity": 75},
+					{"pitch": 64, "start": 5.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 62, "start": 6.0, "duration": 2.0, "velocity": 80},
+					
+					{"pitch": 60, "start": 8.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 62, "start": 9.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 64, "start": 10.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 65, "start": 11.0, "duration": 1.5, "velocity": 85},
+					{"pitch": 64, "start": 12.5, "duration": 0.5, "velocity": 75},
+					{"pitch": 62, "start": 13.0, "duration": 1.0, "velocity": 80},
+					{"pitch": 60, "start": 14.0, "duration": 2.0, "velocity": 80}
+				]
+			},
+			{
+				"name": "Accompaniment",
+				"instrument": 46,
+				"channel": 1,
+				"notes": [
+					{"pitch": 50, "start": 0.0, "duration": 3.0, "velocity": 60},
+					{"pitch": 53, "start": 3.0, "duration": 3.0, "velocity": 60},
+					{"pitch": 48, "start": 6.0, "duration": 2.0, "velocity": 60},
+					{"pitch": 50, "start": 8.0, "duration": 3.0, "velocity": 60},
+					{"pitch": 52, "start": 11.0, "duration": 3.0, "velocity": 60},
+					{"pitch": 48, "start": 14.0, "duration": 2.0, "velocity": 60}
+				]
+			}
+		]
+	},
+	"dungeon_depths": {
+		"title": "Dungeon Depths",
+		"tempo": 80,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Dark Choir",
+				"instrument": 52,
+				"channel": 0,
+				"notes": [
+					{"pitch": 48, "start": 0.0, "duration": 4.0, "velocity": 70},
+					{"pitch": 50, "start": 4.0, "duration": 4.0, "velocity": 70},
+					{"pitch": 47, "start": 8.0, "duration": 4.0, "velocity": 70},
+					{"pitch": 45, "start": 12.0, "duration": 4.0, "velocity": 70},
+					
+					{"pitch": 52, "start": 2.0, "duration": 4.0, "velocity": 60},
+					{"pitch": 53, "start": 6.0, "duration": 4.0, "velocity": 60},
+					{"pitch": 50, "start": 10.0, "duration": 4.0, "velocity": 60},
+					{"pitch": 48, "start": 14.0, "duration": 2.0, "velocity": 60}
+				]
+			},
+			{
+				"name": "Deep Bass",
+				"instrument": 38,
+				"channel": 1,
+				"notes": [
+					{"pitch": 36, "start": 0.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 38, "start": 4.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 35, "start": 8.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 33, "start": 12.0, "duration": 2.0, "velocity": 85}
+				]
+			}
+		]
+	},
+	"castle_march": {
+		"title": "Castle March",
+		"tempo": 110,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Brass Fanfare",
+				"instrument": 56,
+				"channel": 0,
+				"notes": [
+					{"pitch": 60, "start": 0.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 64, "start": 1.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 67, "start": 2.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 72, "start": 3.0, "duration": 1.0, "velocity": 110},
+					
+					{"pitch": 71, "start": 4.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 69, "start": 4.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 67, "start": 5.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 64, "start": 6.0, "duration": 2.0, "velocity": 100},
+					
+					{"pitch": 60, "start": 8.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 64, "start": 9.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 67, "start": 10.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 72, "start": 11.0, "duration": 1.0, "velocity": 110},
+					
+					{"pitch": 74, "start": 12.0, "duration": 0.5, "velocity": 110},
+					{"pitch": 72, "start": 12.5, "duration": 0.5, "velocity": 110},
+					{"pitch": 71, "start": 13.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 67, "start": 14.0, "duration": 2.0, "velocity": 100}
+				]
+			},
+			{
+				"name": "March Drums",
+				"instrument": 0,
+				"channel": 9,
+				"notes": [
+					{"pitch": 36, "start": 0.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 1.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 2.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 3.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 4.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 5.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 6.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 7.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 8.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 9.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 10.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 11.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 12.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 13.0, "duration": 0.25, "velocity": 90},
+					{"pitch": 36, "start": 14.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 15.0, "duration": 0.25, "velocity": 90}
+				]
+			}
+		]
+	},
+	"mystic_forest": {
+		"title": "Mystic Forest",
+		"tempo": 90,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Flute Lead",
+				"instrument": 73,
+				"channel": 0,
+				"notes": [
+					{"pitch": 67, "start": 0.0, "duration": 1.5, "velocity": 75},
+					{"pitch": 69, "start": 1.5, "duration": 1.0, "velocity": 75},
+					{"pitch": 71, "start": 2.5, "duration": 1.5, "velocity": 75},
+					{"pitch": 72, "start": 4.0, "duration": 2.0, "velocity": 80},
+					
+					{"pitch": 71, "start": 6.0, "duration": 1.0, "velocity": 75},
+					{"pitch": 69, "start": 7.0, "duration": 1.0, "velocity": 75},
+					{"pitch": 67, "start": 8.0, "duration": 2.0, "velocity": 75},
+					
+					{"pitch": 64, "start": 10.0, "duration": 1.5, "velocity": 75},
+					{"pitch": 66, "start": 11.5, "duration": 1.0, "velocity": 75},
+					{"pitch": 67, "start": 12.5, "duration": 1.5, "velocity": 75},
+					{"pitch": 69, "start": 14.0, "duration": 2.0, "velocity": 80}
+				]
+			},
+			{
+				"name": "String Pad",
+				"instrument": 48,
+				"channel": 1,
+				"notes": [
+					{"pitch": 55, "start": 0.0, "duration": 8.0, "velocity": 50},
+					{"pitch": 60, "start": 0.0, "duration": 8.0, "velocity": 50},
+					{"pitch": 64, "start": 0.0, "duration": 8.0, "velocity": 50},
+					
+					{"pitch": 52, "start": 8.0, "duration": 8.0, "velocity": 50},
+					{"pitch": 57, "start": 8.0, "duration": 8.0, "velocity": 50},
+					{"pitch": 62, "start": 8.0, "duration": 8.0, "velocity": 50}
+				]
+			}
+		]
+	},
+	"dragon_flight": {
+		"title": "Dragon Flight",
+		"tempo": 140,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Epic Strings",
+				"instrument": 48,
+				"channel": 0,
+				"notes": [
+					{"pitch": 60, "start": 0.0, "duration": 0.5, "velocity": 95},
+					{"pitch": 64, "start": 0.5, "duration": 0.5, "velocity": 95},
+					{"pitch": 67, "start": 1.0, "duration": 0.5, "velocity": 95},
+					{"pitch": 72, "start": 1.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 76, "start": 2.0, "duration": 1.0, "velocity": 105},
+					{"pitch": 75, "start": 3.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 72, "start": 3.5, "duration": 0.5, "velocity": 95},
+					
+					{"pitch": 67, "start": 4.0, "duration": 0.5, "velocity": 95},
+					{"pitch": 64, "start": 4.5, "duration": 0.5, "velocity": 95},
+					{"pitch": 60, "start": 5.0, "duration": 1.0, "velocity": 90},
+					{"pitch": 64, "start": 6.0, "duration": 2.0, "velocity": 95},
+					
+					{"pitch": 62, "start": 8.0, "duration": 0.5, "velocity": 95},
+					{"pitch": 65, "start": 8.5, "duration": 0.5, "velocity": 95},
+					{"pitch": 69, "start": 9.0, "duration": 0.5, "velocity": 95},
+					{"pitch": 74, "start": 9.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 77, "start": 10.0, "duration": 1.0, "velocity": 105},
+					{"pitch": 74, "start": 11.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 69, "start": 12.0, "duration": 2.0, "velocity": 95},
+					{"pitch": 65, "start": 14.0, "duration": 2.0, "velocity": 90}
+				]
+			},
+			{
+				"name": "Power Drums",
+				"instrument": 0,
+				"channel": 9,
+				"notes": [
+					{"pitch": 36, "start": 0.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 36, "start": 0.5, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 1.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 36, "start": 2.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 38, "start": 3.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 36, "start": 4.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 36, "start": 4.5, "duration": 0.25, "velocity": 100},
+					{"pitch": 38, "start": 5.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 36, "start": 6.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 38, "start": 7.0, "duration": 0.25, "velocity": 100}
+				]
+			},
+			{
+				"name": "Horn Section",
+				"instrument": 60,
+				"channel": 2,
+				"notes": [
+					{"pitch": 48, "start": 0.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 52, "start": 2.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 48, "start": 4.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 55, "start": 6.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 50, "start": 8.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 53, "start": 10.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 50, "start": 12.0, "duration": 2.0, "velocity": 100},
+					{"pitch": 57, "start": 14.0, "duration": 2.0, "velocity": 100}
+				]
+			}
+		]
+	},
+	"elven_lullaby": {
+		"title": "Elven Lullaby",
+		"tempo": 70,
+		"time_signature": [3, 4],
+		"tracks": [
+			{
+				"name": "Harp Melody",
+				"instrument": 46,
+				"channel": 0,
+				"notes": [
+					{"pitch": 72, "start": 0.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 76, "start": 1.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 79, "start": 2.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 76, "start": 3.0, "duration": 1.5, "velocity": 70},
+					{"pitch": 74, "start": 4.5, "duration": 0.5, "velocity": 65},
+					{"pitch": 72, "start": 5.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 71, "start": 6.0, "duration": 2.0, "velocity": 65},
+					
+					{"pitch": 69, "start": 8.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 71, "start": 9.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 72, "start": 10.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 74, "start": 11.0, "duration": 1.5, "velocity": 70},
+					{"pitch": 72, "start": 12.5, "duration": 0.5, "velocity": 65},
+					{"pitch": 71, "start": 13.0, "duration": 1.0, "velocity": 65},
+					{"pitch": 69, "start": 14.0, "duration": 2.0, "velocity": 65}
+				]
+			},
+			{
+				"name": "Soft Strings",
+				"instrument": 48,
+				"channel": 1,
+				"notes": [
+					{"pitch": 60, "start": 0.0, "duration": 6.0, "velocity": 45},
+					{"pitch": 64, "start": 0.0, "duration": 6.0, "velocity": 45},
+					{"pitch": 67, "start": 0.0, "duration": 6.0, "velocity": 45},
+					
+					{"pitch": 57, "start": 6.0, "duration": 6.0, "velocity": 45},
+					{"pitch": 62, "start": 6.0, "duration": 6.0, "velocity": 45},
+					{"pitch": 65, "start": 6.0, "duration": 6.0, "velocity": 45}
+				]
+			}
+		]
+	},
+	"battle_theme": {
+		"title": "Battle Theme",
+		"tempo": 160,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Lead Guitar",
+				"instrument": 29,
+				"channel": 0,
+				"notes": [
+					{"pitch": 64, "start": 0.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 64, "start": 0.25, "duration": 0.25, "velocity": 100},
+					{"pitch": 64, "start": 0.5, "duration": 0.25, "velocity": 100},
+					{"pitch": 67, "start": 0.75, "duration": 0.25, "velocity": 100},
+					{"pitch": 69, "start": 1.0, "duration": 0.5, "velocity": 105},
+					{"pitch": 67, "start": 1.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 64, "start": 2.0, "duration": 1.0, "velocity": 100},
+					
+					{"pitch": 62, "start": 3.0, "duration": 0.25, "velocity": 100},
+					{"pitch": 64, "start": 3.25, "duration": 0.25, "velocity": 100},
+					{"pitch": 67, "start": 3.5, "duration": 0.5, "velocity": 105},
+					{"pitch": 71, "start": 4.0, "duration": 1.0, "velocity": 110},
+					
+					{"pitch": 69, "start": 5.0, "duration": 0.5, "velocity": 105},
+					{"pitch": 67, "start": 5.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 64, "start": 6.0, "duration": 2.0, "velocity": 100}
+				]
+			},
+			{
+				"name": "Power Chords",
+				"instrument": 30,
+				"channel": 1,
+				"notes": [
+					{"pitch": 40, "start": 0.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 47, "start": 0.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 40, "start": 0.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 47, "start": 0.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 40, "start": 1.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 47, "start": 1.0, "duration": 0.5, "velocity": 100},
+					{"pitch": 43, "start": 1.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 50, "start": 1.5, "duration": 0.5, "velocity": 100},
+					{"pitch": 40, "start": 2.0, "duration": 1.0, "velocity": 100},
+					{"pitch": 47, "start": 2.0, "duration": 1.0, "velocity": 100}
+				]
+			},
+			{
+				"name": "Battle Drums",
+				"instrument": 0,
+				"channel": 9,
+				"notes": [
+					{"pitch": 36, "start": 0.0, "duration": 0.25, "velocity": 120},
+					{"pitch": 36, "start": 0.5, "duration": 0.25, "velocity": 110},
+					{"pitch": 38, "start": 1.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 36, "start": 1.5, "duration": 0.25, "velocity": 110},
+					{"pitch": 36, "start": 2.0, "duration": 0.25, "velocity": 120},
+					{"pitch": 38, "start": 3.0, "duration": 0.25, "velocity": 110},
+					{"pitch": 42, "start": 0.0, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 0.25, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 0.5, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 0.75, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 1.0, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 1.25, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 1.5, "duration": 0.125, "velocity": 80},
+					{"pitch": 42, "start": 1.75, "duration": 0.125, "velocity": 80}
+				]
+			}
+		]
+	},
+	"wizard_tower": {
+		"title": "Wizard Tower",
+		"tempo": 95,
+		"time_signature": [4, 4],
+		"tracks": [
+			{
+				"name": "Organ Lead",
+				"instrument": 19,
+				"channel": 0,
+				"notes": [
+					{"pitch": 55, "start": 0.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 58, "start": 2.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 62, "start": 4.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 58, "start": 6.0, "duration": 2.0, "velocity": 85},
+					
+					{"pitch": 60, "start": 8.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 63, "start": 10.0, "duration": 2.0, "velocity": 85},
+					{"pitch": 67, "start": 12.0, "duration": 2.0, "velocity": 90},
+					{"pitch": 65, "start": 14.0, "duration": 2.0, "velocity": 85}
+				]
+			},
+			{
+				"name": "Mystical Bells",
+				"instrument": 14,
+				"channel": 1,
+				"notes": [
+					{"pitch": 79, "start": 0.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 82, "start": 1.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 86, "start": 2.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 82, "start": 3.0, "duration": 0.5, "velocity": 70},
+					
+					{"pitch": 84, "start": 4.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 87, "start": 5.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 91, "start": 6.0, "duration": 0.5, "velocity": 75},
+					{"pitch": 89, "start": 7.0, "duration": 0.5, "velocity": 70},
+					
+					{"pitch": 86, "start": 8.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 84, "start": 9.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 82, "start": 10.0, "duration": 0.5, "velocity": 70},
+					{"pitch": 79, "start": 11.0, "duration": 1.0, "velocity": 70}
+				]
+			},
+			{
+				"name": "Bass Foundation",
+				"instrument": 38,
+				"channel": 2,
+				"notes": [
+					{"pitch": 31, "start": 0.0, "duration": 4.0, "velocity": 80},
+					{"pitch": 34, "start": 4.0, "duration": 4.0, "velocity": 80},
+					{"pitch": 36, "start": 8.0, "duration": 4.0, "velocity": 80},
+					{"pitch": 38, "start": 12.0, "duration": 4.0, "velocity": 80}
+				]
+			}
+		]
+	}
+}

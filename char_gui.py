@@ -121,50 +121,84 @@ CLASSES = {
 
 EQUIPMENT = {
     "Weapons": {
-        "Dagger": {"cost": 2, "weight": 1, "damage": "1d4"},
-        "Short Sword": {"cost": 10, "weight": 3, "damage": "1d6"},
-        "Long Sword": {"cost": 15, "weight": 4, "damage": "1d8"},
-        "Bastard Sword": {"cost": 25, "weight": 6, "damage": "1d10"},
-        "Two-Handed Sword": {"cost": 50, "weight": 15, "damage": "1d10"},
-        "Hand Axe": {"cost": 1, "weight": 5, "damage": "1d6"},
-        "Battle Axe": {"cost": 5, "weight": 7, "damage": "1d8"},
-        "War Hammer": {"cost": 2, "weight": 6, "damage": "1d4+1"},
-        "Mace": {"cost": 8, "weight": 8, "damage": "1d6+1"},
-        "Spear": {"cost": 1, "weight": 5, "damage": "1d6"},
-        "Quarterstaff": {"cost": 1, "weight": 4, "damage": "1d6"},
-        "Club": {"cost": 0, "weight": 3, "damage": "1d4"},
-        "Short Bow": {"cost": 30, "weight": 2, "damage": "1d6"},
-        "Long Bow": {"cost": 75, "weight": 3, "damage": "1d8"},
-        "Light Crossbow": {"cost": 35, "weight": 7, "damage": "1d4"},
-        "Sling": {"cost": 1, "weight": 0, "damage": "1d4"},
+        "Dagger": {"cost": 2, "weight": 1, "damage": "1d4", "size": "small", "equippable": True, "equipment_slot": "main_hand"},
+        "Short Sword": {"cost": 10, "weight": 3, "damage": "1d6", "size": "small", "equippable": True, "equipment_slot": "main_hand"},
+        "Long Sword": {"cost": 15, "weight": 4, "damage": "1d8", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Bastard Sword": {"cost": 25, "weight": 6, "damage": "1d10", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Two-Handed Sword": {"cost": 50, "weight": 15, "damage": "1d10", "size": "large", "equippable": True, "equipment_slot": "main_hand"},
+        "Hand Axe": {"cost": 1, "weight": 5, "damage": "1d6", "size": "small", "equippable": True, "equipment_slot": "main_hand"},
+        "Battle Axe": {"cost": 5, "weight": 7, "damage": "1d8", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "War Hammer": {"cost": 2, "weight": 6, "damage": "1d4+1", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Mace": {"cost": 8, "weight": 8, "damage": "1d6+1", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Spear": {"cost": 1, "weight": 5, "damage": "1d6", "size": "large", "equippable": True, "equipment_slot": "main_hand"},
+        "Quarterstaff": {"cost": 1, "weight": 4, "damage": "1d6", "size": "large", "equippable": True, "equipment_slot": "main_hand"},
+        "Club": {"cost": 0, "weight": 3, "damage": "1d4", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Short Bow": {"cost": 30, "weight": 2, "damage": "1d6", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Long Bow": {"cost": 75, "weight": 3, "damage": "1d8", "size": "large", "equippable": True, "equipment_slot": "main_hand"},
+        "Light Crossbow": {"cost": 35, "weight": 7, "damage": "1d4", "size": "medium", "equippable": True, "equipment_slot": "main_hand"},
+        "Sling": {"cost": 1, "weight": 0.5, "damage": "1d4", "size": "small", "equippable": True, "equipment_slot": "main_hand"},
     },
     "Armor": {
-        "Leather Armor": {"cost": 5, "weight": 15, "ac": 8},
-        "Studded Leather": {"cost": 20, "weight": 25, "ac": 7},
-        "Ring Mail": {"cost": 100, "weight": 30, "ac": 7},
-        "Scale Mail": {"cost": 120, "weight": 40, "ac": 6},
-        "Chain Mail": {"cost": 150, "weight": 40, "ac": 5},
-        "Splint Mail": {"cost": 200, "weight": 45, "ac": 4},
-        "Plate Mail": {"cost": 600, "weight": 50, "ac": 3},
-        "Shield": {"cost": 10, "weight": 10, "ac": -1},
+        "Leather Armor": {"cost": 5, "weight": 15, "ac": 8, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Studded Leather": {"cost": 20, "weight": 25, "ac": 7, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Ring Mail": {"cost": 100, "weight": 30, "ac": 7, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Scale Mail": {"cost": 120, "weight": 40, "ac": 6, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Chain Mail": {"cost": 150, "weight": 40, "ac": 5, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Splint Mail": {"cost": 200, "weight": 45, "ac": 4, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Plate Mail": {"cost": 600, "weight": 50, "ac": 3, "size": "large", "equippable": True, "equipment_slot": "body"},
+        "Shield": {"cost": 10, "weight": 10, "ac": -1, "size": "medium", "equippable": True, "equipment_slot": "off_hand"},
+    },
+    "Containers": {
+        # Pouches and small bags
+        "Belt Pouch": {"cost": 1, "weight": 0.5, "size": "small", "is_container": True, "slots": 2, "max_item_size": "small", "weight_reduction": 0.0},
+        "Small Sack": {"cost": 1, "weight": 0.5, "size": "small", "is_container": True, "slots": 3, "max_item_size": "small", "weight_reduction": 0.0},
+        "Large Sack": {"cost": 2, "weight": 1, "size": "medium", "is_container": True, "slots": 5, "max_item_size": "medium", "weight_reduction": 0.0},
+        
+        # Backpacks
+        "Small Backpack": {"cost": 2, "weight": 2, "size": "medium", "is_container": True, "slots": 6, "max_item_size": "medium", "weight_reduction": 0.1},
+        "Backpack": {"cost": 3, "weight": 2.5, "size": "medium", "is_container": True, "slots": 10, "max_item_size": "large", "weight_reduction": 0.15},
+        "Large Backpack": {"cost": 5, "weight": 3, "size": "medium", "is_container": True, "slots": 12, "max_item_size": "large", "weight_reduction": 0.2},
+        
+        # Specialty containers
+        "Rucksack": {"cost": 4, "weight": 3, "size": "medium", "is_container": True, "slots": 8, "max_item_size": "large", "weight_reduction": 0.1},
+        "Haversack": {"cost": 6, "weight": 2, "size": "medium", "is_container": True, "slots": 14, "max_item_size": "large", "weight_reduction": 0.25},
+        
+        # Magic containers (rare/expensive)
+        "Bag of Holding (Minor)": {"cost": 500, "weight": 1, "size": "medium", "is_container": True, "slots": 15, "max_item_size": "large", "weight_reduction": 0.5},
+        "Bag of Holding": {"cost": 2500, "weight": 1, "size": "medium", "is_container": True, "slots": 20, "max_item_size": "large", "weight_reduction": 0.75},
     },
     "Gear": {
-        "Backpack": {"cost": 2, "weight": 2},
-        "Bedroll": {"cost": 1, "weight": 5},
-        "Rope (50ft)": {"cost": 1, "weight": 8},
-        "Torches (6)": {"cost": 1, "weight": 6},
-        "Lantern": {"cost": 7, "weight": 3},
-        "Oil Flask": {"cost": 1, "weight": 1},
-        "Waterskin": {"cost": 1, "weight": 4},
-        "Rations (7 days)": {"cost": 5, "weight": 7},
-        "Thieves' Tools": {"cost": 30, "weight": 1},
-        "Holy Symbol": {"cost": 25, "weight": 0},
-        "Spellbook": {"cost": 15, "weight": 3},
-        "Tent": {"cost": 5, "weight": 20},
+        # Equippable gear
+        "Leather Helm": {"cost": 3, "weight": 2, "ac": -1, "size": "small", "equippable": True, "equipment_slot": "head"},
+        "Iron Helm": {"cost": 10, "weight": 5, "ac": -1, "size": "medium", "equippable": True, "equipment_slot": "head"},
+        "Leather Boots": {"cost": 2, "weight": 2, "size": "small", "equippable": True, "equipment_slot": "feet"},
+        "Iron Boots": {"cost": 8, "weight": 4, "size": "medium", "equippable": True, "equipment_slot": "feet"},
+        "Leather Gloves": {"cost": 2, "weight": 1, "size": "small", "equippable": True, "equipment_slot": "hands"},
+        "Gauntlets": {"cost": 8, "weight": 3, "ac": -1, "size": "small", "equippable": True, "equipment_slot": "hands"},
+        "Leather Greaves": {"cost": 3, "weight": 3, "size": "small", "equippable": True, "equipment_slot": "legs"},
+        "Iron Greaves": {"cost": 10, "weight": 6, "ac": -1, "size": "medium", "equippable": True, "equipment_slot": "legs"},
+        "Bracers": {"cost": 5, "weight": 1, "size": "small", "equippable": True, "equipment_slot": "wrist"},
+        "Amulet": {"cost": 10, "weight": 0.1, "size": "small", "equippable": True, "equipment_slot": "neck"},
+        "Ring of Protection": {"cost": 100, "weight": 0.1, "ac": -1, "size": "small", "equippable": True, "equipment_slot": "ring"},
+        "Silver Ring": {"cost": 5, "weight": 0.1, "size": "small", "equippable": True, "equipment_slot": "ring"},
+        "Lucky Charm": {"cost": 15, "weight": 0.2, "size": "small", "equippable": True, "equipment_slot": "trinket"},
+        
+        # Non-equippable gear
+        "Bedroll": {"cost": 1, "weight": 5, "size": "large"},
+        "Rope (50ft)": {"cost": 1, "weight": 8, "size": "medium"},
+        "Torches (6)": {"cost": 1, "weight": 6, "size": "medium"},
+        "Lantern": {"cost": 7, "weight": 3, "size": "small"},
+        "Oil Flask": {"cost": 1, "weight": 1, "size": "small"},
+        "Waterskin": {"cost": 1, "weight": 4, "size": "small"},
+        "Rations (7 days)": {"cost": 5, "weight": 7, "size": "medium"},
+        "Thieves' Tools": {"cost": 30, "weight": 1, "size": "small"},
+        "Holy Symbol": {"cost": 25, "weight": 0.5, "size": "small", "equippable": True, "equipment_slot": "trinket"},
+        "Spellbook": {"cost": 15, "weight": 3, "size": "medium"},
+        "Tent": {"cost": 5, "weight": 20, "size": "large"},
     },
     "Potions": {
-        "Healing Potion": {"cost": 50, "weight": 0.5},
-        "Antidote": {"cost": 25, "weight": 0.5},
+        "Healing Potion": {"cost": 50, "weight": 0.5, "size": "small", "usable_from_inventory": True},
+        "Antidote": {"cost": 25, "weight": 0.5, "size": "small", "usable_from_inventory": True},
     }
 }
 
@@ -211,6 +245,9 @@ class CharacterCreatorGUI:
         pygame.display.set_caption("AD&D 2nd Edition Character Creator")
         self.clock = pygame.time.Clock()
         
+        # Start playing Mystic Forest music at 50% volume
+        self._start_music()
+        
         # Build font using game's font system (single font size like the game)
         self.font = self._build_font(CELL_HEIGHT)
         
@@ -219,6 +256,39 @@ class CharacterCreatorGUI:
         parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False, grain_tile=10)
         parchment_renderer.build_layers(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.parchment_bg = parchment_renderer.generate(WINDOW_WIDTH, WINDOW_HEIGHT)
+    
+    def _start_music(self):
+        """Start playing Mystic Forest music at 50% volume"""
+        try:
+            import os
+            import json
+            import tempfile
+            
+            # Get the music player from parent directory
+            sys.path.insert(0, os.path.dirname(__file__))
+            from music import get_music_player
+            
+            self.music_player = get_music_player()
+            
+            # Load Mystic Forest song from songs.json
+            songs_path = os.path.join(os.path.dirname(__file__), "songs.json")
+            with open(songs_path, 'r') as f:
+                songs = json.load(f)
+            
+            # Create temporary file with just the Mystic Forest theme
+            temp_song = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+            json.dump(songs["mystic_forest"], temp_song)
+            temp_song.close()
+            
+            # Play with 2 second fade in at 50% volume
+            self.music_player.set_volume(0.5)
+            self.music_player.play_song(temp_song.name, loops=-1, fade_ms=2000)
+            
+            # Clean up temp file
+            os.unlink(temp_song.name)
+        except Exception as e:
+            print(f"Could not load music: {e}")
+            self.music_player = None
     
     def _build_font(self, ch_h: int) -> pygame.font.Font:
         """Build optimal font for given cell height (matches game's font building).
@@ -988,6 +1058,14 @@ def run_character_creator():
     try:
         creator = CharacterCreatorGUI()
         character = creator.run()
+        
+        # Stop music with fade out
+        if hasattr(creator, 'music_player') and creator.music_player:
+            creator.music_player.stop(fade_ms=2000)
+            # Wait for fade to complete
+            import time
+            time.sleep(2)
+        
         pygame.quit()
         return character
     except Exception as e:

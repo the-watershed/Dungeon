@@ -4,7 +4,7 @@ import time
 import random
 import math
 import re
-from typing import Callable
+from typing import Callable, List, Dict, Optional, Tuple
 
 # Windows-specific: enable ANSI escape processing for colors/cursor control
 msvcrt = None  # ensure defined on all platforms
@@ -282,6 +282,7 @@ def clamp(v: float, a: float, b: float) -> float:
 from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon, MAT_COBBLE, MAT_BRICK, MAT_DIRT, MAT_MOSS, MAT_SAND, MAT_IRON, MAT_GRASS, MAT_WATER, MAT_LAVA, MAT_MARBLE, MAT_WOOD, TILE_DOOR, DOOR_CLOSED, DOOR_OPEN, DOOR_LOCKED
 from prefab_loader import load_prefabs
 from parchment_renderer import ParchmentRenderer
+from music import get_music_player
 # ---------------------------
 # Save/Load helpers
 # ---------------------------
@@ -1037,12 +1038,447 @@ def run_terminal() -> None:
 		show_cursor()
 
 
+# ===========================
+# INVENTORY SYSTEM - Slot-Based with Containers
+# ===========================
+
+class InventoryItem:
+	"""Represents an item with all its properties for display and sorting"""
+	def __init__(self, name: str, category: str, properties: dict):
+		self.name = name
+		self.category = category  # Weapons, Armor, Gear, Potions, Containers
+		self.cost = properties.get('cost', 0)
+		self.weight = properties.get('weight', 0)
+		self.damage = properties.get('damage', '')
+		self.ac = properties.get('ac', None)
+		self.speed = properties.get('speed', None)
+		self.size = properties.get('size', 'medium')  # small, medium, large
+		self.properties = properties
+		
+		# Equipment slot properties
+		self.equippable = properties.get('equippable', False)
+		self.equipment_slot = properties.get('equipment_slot', None)  # head, neck, body, wrist, hands, ring, legs, feet, trinket, main_hand, off_hand
+		self.usable_from_inventory = properties.get('usable_from_inventory', False)  # Can be used without equipping
+		
+		# Container-specific properties
+		self.is_container = properties.get('is_container', False)
+		self.slots = properties.get('slots', 0)  # Number of slots if container
+		self.max_item_size = properties.get('max_item_size', 'large')  # Max size items it can hold
+		self.weight_reduction = properties.get('weight_reduction', 0.0)  # % weight reduction (0.0-1.0)
+		
+		# Container contents (if this is a container)
+		self.contents: List[Optional['InventoryItem']] = [None] * self.slots if self.is_container else []
+	
+	def get_type_display(self) -> str:
+		"""Return the item type/category"""
+		if self.is_container:
+			return f"Container ({self.slots})"
+		return self.category
+	
+	def get_damage_display(self) -> str:
+		"""Return damage string or '-' if not applicable"""
+		return self.damage if self.damage else '-'
+	
+	def get_ac_display(self) -> str:
+		"""Return AC modifier or '-' if not applicable"""
+		if self.ac is not None:
+			if self.ac > 0:
+				return f"+{self.ac}"
+			elif self.ac < 0:
+				return str(self.ac)
+			else:
+				return "0"
+		return '-'
+	
+	def get_speed_display(self) -> str:
+		"""Return speed factor or '-' if not applicable"""
+		return str(self.speed) if self.speed is not None else '-'
+	
+	def get_container_info(self) -> str:
+		"""Return container capacity info"""
+		if not self.is_container:
+			return ''
+		used = sum(1 for item in self.contents if item is not None)
+		return f"{used}/{self.slots} slots"
+	
+	def get_effective_weight(self) -> float:
+		"""Calculate effective weight including container contents and reduction"""
+		base_weight = self.weight
+		if self.is_container:
+			contents_weight = sum(item.get_effective_weight() for item in self.contents if item is not None)
+			# Apply weight reduction to contents
+			reduced_contents = contents_weight * (1.0 - self.weight_reduction)
+			return base_weight + reduced_contents
+		return base_weight
+	
+	def can_fit_item(self, item: 'InventoryItem') -> bool:
+		"""Check if item can fit in this container"""
+		if not self.is_container:
+			return False
+		# Check if there's an empty slot
+		if not any(slot is None for slot in self.contents):
+			return False
+		# Check size restrictions
+		size_order = {'small': 0, 'medium': 1, 'large': 2}
+		item_size = size_order.get(item.size, 1)
+		max_size = size_order.get(self.max_item_size, 2)
+		return item_size <= max_size
+	
+	def add_item(self, item: 'InventoryItem') -> bool:
+		"""Add item to first empty slot in container"""
+		if not self.can_fit_item(item):
+			return False
+		for i in range(len(self.contents)):
+			if self.contents[i] is None:
+				self.contents[i] = item
+				return True
+		return False
+	
+	def remove_item(self, index: int) -> Optional['InventoryItem']:
+		"""Remove and return item at index"""
+		if 0 <= index < len(self.contents) and self.contents[index] is not None:
+			item = self.contents[index]
+			self.contents[index] = None
+			return item
+		return None
+
+
+class CharacterInventory:
+	"""Manages character's 8-slot inventory system"""
+	BASE_SLOTS = 8
+	
+	def __init__(self):
+		self.slots: List[Optional[InventoryItem]] = [None] * self.BASE_SLOTS
+	
+	def get_total_weight(self) -> float:
+		"""Calculate total carried weight"""
+		return sum(item.get_effective_weight() for item in self.slots if item is not None)
+	
+	def get_item_count(self) -> int:
+		"""Count total items including container contents"""
+		count = sum(1 for item in self.slots if item is not None)
+		for item in self.slots:
+			if item and item.is_container:
+				count += sum(1 for content_item in item.contents if content_item is not None)
+		return count
+	
+	def add_item_auto(self, item: InventoryItem) -> bool:
+		"""Auto-add item: fill empty main slots first, then containers"""
+		# First, try to add to empty main slot
+		for i in range(self.BASE_SLOTS):
+			if self.slots[i] is None:
+				self.slots[i] = item
+				return True
+		
+		# No empty main slots, try to add to containers
+		for container in self.slots:
+			if container and container.is_container and container.add_item(item):
+				return True
+		
+		return False  # Inventory full
+	
+	def get_all_items_flat(self) -> List[InventoryItem]:
+		"""Get all items as flat list (for old inventory display compatibility)"""
+		items = []
+		for item in self.slots:
+			if item:
+				items.append(item)
+				if item.is_container:
+					items.extend([content for content in item.contents if content is not None])
+		return items
+
+
+class CharacterEquipment:
+	"""Manages character's equipped/worn items (paperdoll)"""
+	SLOT_ORDER = ['head', 'neck', 'body', 'left_wrist', 'right_wrist', 'hands', 
+	              'left_ring', 'right_ring', 'legs', 'feet', 'trinket', 'main_hand', 'off_hand']
+	
+	SLOT_DISPLAY_NAMES = {
+		'head': 'Head',
+		'neck': 'Neck',
+		'body': 'Body',
+		'left_wrist': 'Left Wrist',
+		'right_wrist': 'Right Wrist',
+		'hands': 'Hands',
+		'left_ring': 'Left Ring',
+		'right_ring': 'Right Ring',
+		'legs': 'Legs',
+		'feet': 'Feet',
+		'trinket': 'Trinket',
+		'main_hand': 'Main Hand',
+		'off_hand': 'Off-Hand'
+	}
+	
+	def __init__(self):
+		self.equipped: Dict[str, Optional[InventoryItem]] = {slot: None for slot in self.SLOT_ORDER}
+	
+	def can_equip(self, item: InventoryItem, slot: str = None) -> tuple[bool, str]:
+		"""Check if item can be equipped. Returns (can_equip, reason)"""
+		if not item.equippable:
+			return False, "Item is not equippable"
+		
+		target_slot = slot if slot else item.equipment_slot
+		if not target_slot:
+			return False, "Item has no equipment slot defined"
+		
+		# Handle special cases for ring/wrist (can go in left or right)
+		if item.equipment_slot == 'ring' and slot in ['left_ring', 'right_ring']:
+			return True, ""
+		if item.equipment_slot == 'wrist' and slot in ['left_wrist', 'right_wrist']:
+			return True, ""
+		
+		# Standard slot matching
+		if target_slot in self.SLOT_ORDER:
+			return True, ""
+		
+		return False, f"Invalid equipment slot: {target_slot}"
+	
+	def equip_item(self, item: InventoryItem, slot: str = None) -> Optional[InventoryItem]:
+		"""Equip item to slot. Returns previously equipped item if any."""
+		target_slot = slot if slot else item.equipment_slot
+		
+		# For rings/wrists without specific slot, find first empty or use left
+		if item.equipment_slot == 'ring' and not slot:
+			if self.equipped['left_ring'] is None:
+				target_slot = 'left_ring'
+			elif self.equipped['right_ring'] is None:
+				target_slot = 'right_ring'
+			else:
+				target_slot = 'left_ring'  # Default to left, will swap
+		
+		if item.equipment_slot == 'wrist' and not slot:
+			if self.equipped['left_wrist'] is None:
+				target_slot = 'left_wrist'
+			elif self.equipped['right_wrist'] is None:
+				target_slot = 'right_wrist'
+			else:
+				target_slot = 'left_wrist'  # Default to left, will swap
+		
+		can_equip, reason = self.can_equip(item, target_slot)
+		if not can_equip:
+			return None
+		
+		# Swap out currently equipped item
+		old_item = self.equipped[target_slot]
+		self.equipped[target_slot] = item
+		return old_item
+	
+	def unequip_item(self, slot: str) -> Optional[InventoryItem]:
+		"""Remove item from slot. Returns the item."""
+		if slot in self.equipped:
+			item = self.equipped[slot]
+			self.equipped[slot] = None
+			return item
+		return None
+	
+	def get_equipped_item(self, slot: str) -> Optional[InventoryItem]:
+		"""Get item in slot"""
+		return self.equipped.get(slot, None)
+	
+	def get_total_ac_bonus(self) -> int:
+		"""Calculate total AC bonus from all equipped items"""
+		bonus = 0
+		for item in self.equipped.values():
+			if item and item.ac is not None:
+				bonus += item.ac
+		return bonus
+	
+	def get_equipped_weight(self) -> float:
+		"""Calculate weight of all equipped items"""
+		return sum(item.get_effective_weight() for item in self.equipped.values() if item is not None)
+
+
+def load_equipment_database():
+	"""Load equipment data from char_gui.py"""
+	try:
+		from char_gui import EQUIPMENT
+		items = []
+		for category, item_dict in EQUIPMENT.items():
+			for item_name, props in item_dict.items():
+				items.append(InventoryItem(item_name, category, props))
+		return items
+	except Exception as e:
+		print(f"Error loading equipment database: {e}")
+		return []
+
+
+def parse_character_inventory(character) -> List[InventoryItem]:
+	"""Parse character's equipment list into InventoryItem objects"""
+	if not character or not hasattr(character, 'equipment'):
+		return []
+	
+	# Load the equipment database
+	equipment_db = load_equipment_database()
+	
+	# Create a lookup dict for quick access
+	db_lookup = {item.name: item for item in equipment_db}
+	
+	# Parse character's equipment
+	inventory = []
+	for item_name in character.equipment:
+		if item_name in db_lookup:
+			inventory.append(db_lookup[item_name])
+		else:
+			# Unknown item - create a basic entry
+			inventory.append(InventoryItem(item_name, "Unknown", {}))
+	
+	return inventory
+
+
+def show_splash_screen():
+	"""Display splash screen with DUNGEON title. Press any key to continue."""
+	import pygame
+	from parchment_renderer import ParchmentRenderer
+	import os
+	
+	# Initialize pygame
+	pygame.init()
+	
+	# Window size
+	win_w, win_h = BASE_WIN_W, BASE_WIN_H
+	screen = pygame.display.set_mode((win_w, win_h))
+	pygame.display.set_caption("DUNGEON")
+	
+	# Create dark grey parchment background
+	DARK_GREY_BASE = (27, 27, 30)  # Dark grey (twice as dark)
+	DARK_GREY_INK = (17, 17, 19)   # Even darker for texture
+	splash_renderer = ParchmentRenderer(
+		base_color=DARK_GREY_BASE,
+		ink_color=DARK_GREY_INK,
+		enable_vignette=True,
+		vignette_steps=20,
+		grain_tile=10,
+		blotch_count=80,
+		fiber_count=50,
+		speckle_count=500
+	)
+	splash_renderer.build_layers(win_w, win_h, seed=999)
+	splash_bg = splash_renderer.generate(win_w, win_h)
+	
+	# Load Blocky Sketch font at 49pt
+	import os
+	font_path = os.path.join(os.path.dirname(__file__), "Blocky Sketch.ttf")
+	if os.path.isfile(font_path):
+		title_font = pygame.font.Font(font_path, 49)
+	else:
+		# Fallback to system font
+		title_font = pygame.font.Font(None, 49)
+	
+	# Render "DUNGEON" text in white
+	text_surface_full = title_font.render("DUNGEON", True, (255, 255, 255))
+	
+	# Calculate center position
+	text_rect = text_surface_full.get_rect(center=(win_w // 2, win_h // 2))
+	
+	# Start playing A-Team theme with fade in
+	music_player = get_music_player()
+	songs_path = os.path.join(os.path.dirname(__file__), "songs.json")
+	try:
+		# Load songs.json and extract just the a_team_theme
+		import json
+		with open(songs_path, 'r') as f:
+			songs = json.load(f)
+		
+		# Create temporary file with just the A-Team theme
+		import tempfile
+		temp_song = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+		json.dump(songs["a_team_theme"], temp_song)
+		temp_song.close()
+		
+		# Play with 3 second fade in
+		music_player.play_song(temp_song.name, loops=-1, fade_ms=3000)
+		
+		# Clean up temp file
+		os.unlink(temp_song.name)
+	except Exception as e:
+		print(f"Could not load music: {e}")
+	
+	# Combined loop: delay, fade in, then wait indefinitely
+	clock = pygame.time.Clock()
+	delay_duration = 3.0  # seconds
+	fade_duration = 3.0  # seconds
+	
+	delay_frames = int(delay_duration * 60)  # 60 FPS
+	fade_frames = int(fade_duration * 60)  # 60 FPS
+	total_animation_frames = delay_frames + fade_frames
+	
+	hint_font = pygame.font.Font(None, 20)
+	hint_text = "Press any key to continue..."
+	
+	frame = 0
+	waiting = True
+	
+	while waiting:
+		# Process events
+		for event in pygame.event.get():
+			if event.type == pygame.QUIT:
+				music_player.stop()
+				pygame.quit()
+				return False
+			if event.type == pygame.KEYDOWN:
+				waiting = False
+				break
+		
+		# Draw background
+		screen.blit(splash_bg, (0, 0))
+		
+		# Phase 1: Blank parchment (frames 0 to delay_frames)
+		if frame < delay_frames:
+			pass  # Just show background
+		
+		# Phase 2: Fade in text (frames delay_frames to total_animation_frames)
+		elif frame < total_animation_frames:
+			fade_progress = (frame - delay_frames) / fade_frames
+			alpha = int(255 * fade_progress)
+			
+			# Fade in main text
+			text_surface = text_surface_full.copy()
+			text_surface.set_alpha(alpha)
+			screen.blit(text_surface, text_rect)
+			
+			# Fade in hint text slightly after main text (after 50% of fade)
+			if fade_progress > 0.5:
+				hint_progress = (fade_progress - 0.5) / 0.5
+				hint_alpha = int(255 * hint_progress)
+				hint_surface = hint_font.render(hint_text, True, (180, 180, 180))
+				hint_surface.set_alpha(hint_alpha)
+				hint_rect = hint_surface.get_rect(center=(win_w // 2, win_h - 50))
+				screen.blit(hint_surface, hint_rect)
+		
+		# Phase 3: Stay visible indefinitely until keypress
+		else:
+			screen.blit(text_surface_full, text_rect)
+			hint_surface = hint_font.render(hint_text, True, (180, 180, 180))
+			hint_rect = hint_surface.get_rect(center=(win_w // 2, win_h - 50))
+			screen.blit(hint_surface, hint_rect)
+		
+		pygame.display.flip()
+		clock.tick(60)
+		frame += 1
+	
+	# Fade out music when leaving splash screen
+	music_player.stop(fade_ms=1000)
+	
+	return True
+
 def run_pygame():
 	try:
 		import pygame
 	except Exception as e:
 		print("Pygame is required for the windowed mode. Install with: pip install pygame")
 		raise
+
+	# Initialize pygame mixer ONCE at the very beginning
+	# This prevents re-initialization conflicts between music and sound systems
+	pygame.init()
+	if not pygame.mixer.get_init():
+		pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+		pygame.mixer.set_num_channels(16)  # Allow multiple sounds simultaneously
+	print(f"[AUDIO] Pygame mixer initialized: {pygame.mixer.get_init()}")
+
+	# Show splash screen first
+	if not show_splash_screen():
+		return
 
 	# Launch character creator at startup
 	player_character = None
@@ -1247,28 +1683,36 @@ def run_pygame():
 				glyphs_needed.add(extra)
 		cache = {}
 		antialias = bool(SETTINGS.get('font_antialias', True))
-		def render_glyph(ch, color=(255, 255, 255)):
-			key = (ch, color)
+		def render_glyph(ch, color=(255, 255, 255), bold=False):
+			key = (ch, color, bold)
 			surf = cache.get(key)
 			if surf is None:
+				if bold:
+					font_obj.set_bold(True)
 				surf = font_obj.render(ch, antialias, color)
+				if bold:
+					font_obj.set_bold(False)
 				cache[key] = surf
 			return surf
 		return render_glyph
 
-	# Build fonts: regular for map, larger for UI panel
+	# Build fonts: regular for map, larger for UI panel, extra large for titles
 	font = build_font(cell_h)
 	ui_font = build_font(int(cell_h * 1.5))  # 1.5x larger for UI readability
+	title_font = build_font(48)  # 48pt font for menu titles
+	# Enable bold for title font for extra impact
+	title_font.set_bold(True)
 
 	# Build parchment background via renderer module (static, no animation). Disable vignette to avoid concentric rings.
 	# Use cell_w as grain_tile to align texture pattern with character grid
 	parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False, grain_tile=cell_w)
 	parchment_renderer.build_layers(win_w, win_h)
 	parchment_static = parchment_renderer.generate(win_w, win_h)
-	# Build glyph renderers for both fonts
+	# Build glyph renderers for all fonts
 	# render_glyph: type ignore to work around nested function type inference issue
 	render_glyph = build_glyph_cache(font)  # type: ignore
 	render_ui_glyph = build_glyph_cache(ui_font)  # type: ignore
+	render_title_glyph = build_glyph_cache(title_font)  # type: ignore
 
 	# Prebuild texture patterns for different materials
 	def build_material_texture(w, h, material_type):
@@ -1699,7 +2143,7 @@ def run_pygame():
 		off_y = (win_h - vh) // 2
 		return off_x, off_y
 
-	def draw_char_at(cell_x: int, cell_y: int, ch: str, color: tuple[int, int, int], use_ui_font: bool = False) -> None:
+	def draw_char_at(cell_x: int, cell_y: int, ch: str, color: tuple[int, int, int], use_ui_font: bool = False, use_title_font: bool = False, bold: bool = False) -> None:
 		"""Draw a character glyph at specified cell coordinates.
 		
 		Args:
@@ -1708,10 +2152,17 @@ def run_pygame():
 			ch (str): Character to draw
 			color (tuple[int, int, int]): RGB color for the character
 			use_ui_font (bool): If True, use larger UI font instead of map font
+			use_title_font (bool): If True, use extra large title font (48pt)
+			bold (bool): If True, render text in bold
 		"""
 		if ch == ' ':
 			return
-		surf = render_ui_glyph(ch, color) if use_ui_font else render_glyph(ch, color)
+		if use_title_font:
+			surf = render_title_glyph(ch, color, bold)
+		elif use_ui_font:
+			surf = render_ui_glyph(ch, color, bold)
+		else:
+			surf = render_glyph(ch, color, bold)
 		gx = off_x + cell_x * cell_w + (cell_w - surf.get_width()) // 2
 		gy = off_y + cell_y * cell_h + (cell_h - surf.get_height()) // 2
 		screen.blit(surf, (gx, gy))
@@ -1788,11 +2239,11 @@ def run_pygame():
 			s.fill((r, g, b, int(255 * clamp(alpha, 0.0, 1.0))))
 			screen.blit(s, (px, py))
 
-	def draw_text_line(cell_x, cell_y, text, color=(180, 180, 180), max_len=None, use_ui_font=False):
+	def draw_text_line(cell_x, cell_y, text, color=(180, 180, 180), max_len=None, use_ui_font=False, use_title_font=False, bold=False):
 		if max_len is None:
 			max_len = len(text)
 		for i, ch in enumerate(text[:max_len]):
-			draw_char_at(cell_x + i, cell_y, ch, color, use_ui_font=use_ui_font)
+			draw_char_at(cell_x + i, cell_y, ch, color, use_ui_font=use_ui_font, use_title_font=use_title_font, bold=bold)
 
 	# Session state: multi-level support
 	levels = []  # list of dicts: dungeon/explored/player + touched/totals for bricks, walls, floors
@@ -1962,6 +2413,25 @@ def run_pygame():
 	else:
 		add_message("Welcome to the dungeon.")
 
+	# Initialize ambient dungeon sounds (but don't start yet)
+	try:
+		from sounds import get_sound_generator, get_ambience_player
+		sound_generator = get_sound_generator()
+		ambience_player = get_ambience_player()
+		ambience_started = False  # Will start after fade-in completes
+	except Exception as e:
+		print(f"Could not load ambient sounds: {e}")
+		ambience_player = None
+		ambience_started = False
+
+	# Initialize dungeon music (but don't start yet)
+	music_started = False  # Will start after fade-in completes
+
+	# Dungeon fade-in effect
+	dungeon_fade_alpha = 0.0  # Start fully transparent
+	dungeon_fade_duration = 2.0  # Fade in over 2 seconds
+	dungeon_fade_complete = False
+
 	# Menu state
 	menu_open = False
 	menu_mode = 'main'  # main | settings | save | load
@@ -1970,6 +2440,32 @@ def run_pygame():
 	load_index = 0
 	load_names = []
 
+	# Create dark granite parchment for menu (generated once, cached)
+	menu_parchment = None
+	def get_menu_parchment():
+		nonlocal menu_parchment
+		if menu_parchment is None:
+			# Dark granite color (dark grey-brown)
+			GRANITE_BASE = (45, 45, 50)  # Dark bluish-grey like granite
+			GRANITE_INK = (20, 20, 22)   # Even darker for texture
+			menu_parch_renderer = ParchmentRenderer(
+				base_color=GRANITE_BASE,
+				ink_color=GRANITE_INK,
+				enable_vignette=True,
+				vignette_steps=16,
+				grain_tile=cell_w,
+				blotch_count=60,
+				fiber_count=40,
+				speckle_count=400
+			)
+			box_w = 58
+			box_h = 24
+			wpx = box_w * cell_w
+			hpx = box_h * cell_h
+			menu_parch_renderer.build_layers(wpx, hpx, seed=42)  # Fixed seed for consistency
+			menu_parchment = menu_parch_renderer.generate(wpx, hpx)
+		return menu_parchment
+
 	def draw_menu():
 		# DnD-style ASCII menu frame + banner
 		box_w = 58
@@ -1977,19 +2473,20 @@ def run_pygame():
 		x0 = (grid_w - box_w) // 2
 		y0 = (grid_h - box_h) // 2
 
-		# Colors (cream background with dark ink)
-		frame_col = scale_color(INK_DARK, 1.0)
-		title_col = scale_color(INK_DARK, 1.0)
-		text_col = scale_color(INK_DARK, 0.95)
-		dim_col = scale_color(INK_DARK, 0.6)
+		# Colors - light text on dark granite parchment
+		frame_col = MARBLE_WHITE
+		title_col = WALL_LIGHT  # Golden brown for titles
+		text_col = MARBLE_WHITE
+		dim_col = scale_color(MARBLE_WHITE, 0.5)
 
-		# Fill background behind the menu with cream for maximum contrast
+		# Blit dark granite parchment background behind the menu
 		off_x, off_y = compute_offsets()
 		px = off_x + x0 * cell_w
 		py = off_y + y0 * cell_h
 		wpx = box_w * cell_w
 		hpx = box_h * cell_h
-		pygame.draw.rect(screen, PARCHMENT_BG, (px, py, wpx, hpx))
+		menu_bg = get_menu_parchment()
+		screen.blit(menu_bg, (px, py))
 
 		# Border (clean, high-contrast, no noisy fill)
 		# Top and bottom
@@ -2003,15 +2500,18 @@ def run_pygame():
 			draw_char_at(x0 + box_w - 1, y0 + y, '|', frame_col)
 		# Interior left blank (background already filled)
 
-		# Banner (original ASCII, DnD-ish motif)
-		banner = [
-			"o=={::::::::::::::::::::::::::::::::::::::::::::}==o",
-			"       <<  D U N G E O N   M E N U  >>        ",
-			"'=={::::::::::::::::::::::::::::::::::::::::::::}=='",
-		]
-		for i, line in enumerate(banner):
-			bx = x0 + (box_w - len(line)) // 2
-			draw_text_line(bx, y0 + 1 + i, line, title_col)
+		# Large title text at 3x size
+		title_text = "DUNGEON MENU"
+		# Calculate position to center the title (accounting for 3x font size taking more space)
+		# With 3x font, each character takes approximately 3 cells of width
+		title_width_cells = len(title_text) * 3
+		title_x = x0 + (box_w - title_width_cells) // 2
+		title_y = y0 + 2
+		draw_text_line(title_x, title_y, title_text, title_col, use_title_font=True)
+		
+		# Decorative border under title (using regular font)
+		border_line = "=" * (box_w - 6)
+		draw_text_line(x0 + 3, y0 + 5, border_line, dim_col)
 
 		def draw_opts(opts, sel_idx, ystart):
 			for i, text in enumerate(opts):
@@ -2024,29 +2524,353 @@ def run_pygame():
 
 		if menu_mode == 'main':
 			options = ["Character Creator", "Settings", "Save", "Load", "Quit"]
-			draw_opts(options, menu_index, 6)
+			draw_opts(options, menu_index, 8)  # Moved down from 6 to 8
 		elif menu_mode == 'settings':
 			hud = "On" if SETTINGS.get('hud_text', True) else "Off"
 			mm = SETTINGS.get('minimap', {})
 			mme = "On" if (mm.get('enabled', True)) else "Off"
 			options = [f"HUD: {hud}", f"Minimap: {mme}", "Back"]
-			draw_opts(options, menu_index, 6)
+			draw_opts(options, menu_index, 8)  # Moved down from 6 to 8
 		elif menu_mode == 'save':
 			prompt = "Name thy hero and press Enter:"
-			draw_text_line(x0 + 3, y0 + 6, prompt, text_col, box_w - 6)
-			draw_text_line(x0 + 3, y0 + 8, "> " + save_name, title_col, box_w - 6)
+			draw_text_line(x0 + 3, y0 + 8, prompt, text_col, box_w - 6)  # Moved down from 6 to 8
+			draw_text_line(x0 + 3, y0 + 10, "> " + save_name, title_col, box_w - 6)  # Moved down from 8 to 10
 			draw_text_line(x0 + 3, y0 + box_h - 3, "Esc: Back", dim_col)
 		elif menu_mode == 'load':
 			if not load_names:
-				draw_text_line(x0 + 3, y0 + 6, "No chronicles found.", text_col)
+				draw_text_line(x0 + 3, y0 + 8, "No chronicles found.", text_col)  # Moved down from 6 to 8
 				draw_text_line(x0 + 3, y0 + box_h - 3, "Esc: Back", dim_col)
 			else:
-				draw_text_line(x0 + 3, y0 + 6, "Select a chronicle:", text_col)
+				draw_text_line(x0 + 3, y0 + 8, "Select a chronicle:", text_col)  # Moved down from 6 to 8
 				for i, nm in enumerate(load_names):
 					col = title_col if i == load_index else text_col
 					prefix = ">> " if i == load_index else "   "
 					draw_text_line(x0 + 3, y0 + 8 + i, prefix + nm, col, box_w - 6)
 					draw_text_line(x0 + 3, y0 + box_h - 3, "Enter: Load | Esc: Back", dim_col)
+
+	# Inventory state
+	inventory_open = False
+	inventory_main_slot = 0  # Which of the 8 main slots is selected (0-7)
+	inventory_viewing_container = False  # Are we looking inside a container?
+	inventory_container_slot = 0  # Which slot in the container is selected
+	inventory_scroll_offset = 0  # Scroll offset for inventory list
+	inventory_viewing_paperdoll = False  # Are we navigating equipped items with TAB?
+	inventory_paperdoll_slot = 0  # Which equipment slot is selected (0-12)
+	inventory_prompt_mode = None  # 'equip_or_use' when showing disambiguation prompt
+	inventory_prompt_item = None  # Item being prompted about
+
+	# Create dark brown parchment for inventory (generated once, cached)
+	inventory_parchment = None
+	def get_inventory_parchment():
+		nonlocal inventory_parchment
+		if inventory_parchment is None:
+			# Dark brown parchment color (aged leather/wood tone)
+			DARK_BROWN_BASE = (52, 38, 28)  # Dark brown leather/aged parchment
+			DARK_BROWN_INK = (30, 22, 16)   # Even darker brown for texture
+			inv_parch_renderer = ParchmentRenderer(
+				base_color=DARK_BROWN_BASE,
+				ink_color=DARK_BROWN_INK,
+				enable_vignette=True,
+				vignette_steps=20,
+				grain_tile=cell_w,
+				blotch_count=100,
+				fiber_count=70,
+				speckle_count=600
+			)
+			inv_parch_renderer.build_layers(win_w, win_h, seed=123)  # Fixed seed for consistency
+			inventory_parchment = inv_parch_renderer.generate(win_w, win_h)
+		return inventory_parchment
+
+	def draw_inventory_slotbased():
+		"""Draw inventory with paperdoll equipment system and info panel at bottom"""
+		nonlocal inventory_main_slot, inventory_viewing_container, inventory_container_slot
+		nonlocal inventory_scroll_offset, inventory_viewing_paperdoll, inventory_paperdoll_slot
+		nonlocal inventory_prompt_mode, inventory_prompt_item
+		
+		if not player_character:
+			return
+		
+		# Get character inventory (convert old list-based to slot-based if needed)
+		if not hasattr(player_character, 'inventory') or not isinstance(getattr(player_character, 'inventory', None), CharacterInventory):
+			player_character.inventory = CharacterInventory()
+			if hasattr(player_character, 'equipment') and player_character.equipment:
+				equipment_db = load_equipment_database()
+				db_lookup = {item.name: item for item in equipment_db}
+				for item_name in player_character.equipment:
+					if item_name in db_lookup:
+						player_character.inventory.add_item_auto(db_lookup[item_name])
+		
+		# Initialize equipment (paperdoll) if not present
+		if not hasattr(player_character, 'equipped'):
+			player_character.equipped = CharacterEquipment()
+		
+		inv = player_character.inventory
+		equipped = player_character.equipped
+		
+		# Colors - Match main UI palette
+		frame_col = MARBLE_WHITE
+		title_col = WALL_LIGHT  # Golden brown for titles, matching game UI highlights
+		text_col = MARBLE_WHITE
+		dim_col = scale_color(MARBLE_WHITE, 0.5)  # Dimmed white text
+		highlight_col = WALL_LIGHT  # Golden brown for selection highlight
+		paperdoll_highlight = scale_color(WALL_LIGHT, 0.9)  # Slightly brighter for paperdoll
+		
+		# Full screen background - Use dark brown parchment
+		inv_bg = get_inventory_parchment()
+		screen.blit(inv_bg, (0, 0))
+		
+		# Layout: Left = inventory list, Right = paperdoll, Bottom 8 lines = info panel
+		INFO_PANEL_HEIGHT = 8
+		info_panel_y = grid_h - INFO_PANEL_HEIGHT
+		inventory_max_y = info_panel_y - 1
+		
+		# === CHARACTER STATS HEADER (Top section) ===
+		header_y = 1
+		
+		# Title with character name and class/race
+		title = f"{player_character.name} - Lvl {player_character.level} {player_character.race} {player_character.char_class}"
+		draw_text_line(2, header_y, title, title_col, bold=True)
+		header_y += 1
+		
+		# Alignment and XP
+		align_xp = f"Alignment: {player_character.alignment} | XP: {player_character.xp}"
+		draw_text_line(2, header_y, align_xp, text_col)
+		header_y += 1
+		
+		# Combat stats line
+		total_ac = player_character.armor_class + equipped.get_total_ac_bonus()
+		combat_stats = f"HP: {player_character.current_hp}/{player_character.max_hp} | AC: {total_ac} | THAC0: {player_character.thac0}"
+		draw_text_line(2, header_y, combat_stats, text_col)
+		header_y += 1
+		
+		# Ability scores (all 6 in two rows)
+		ability_line1 = f"STR: {player_character.strength:2d}  DEX: {player_character.dexterity:2d}  CON: {player_character.constitution:2d}"
+		ability_line2 = f"INT: {player_character.intelligence:2d}  WIS: {player_character.wisdom:2d}  CHA: {player_character.charisma:2d}"
+		draw_text_line(2, header_y, ability_line1, text_col)
+		header_y += 1
+		draw_text_line(2, header_y, ability_line2, text_col)
+		header_y += 1
+		
+		# Resources and weight
+		total_weight = inv.get_total_weight() + equipped.get_equipped_weight()
+		item_count = inv.get_item_count()
+		resources = f"Gold: {player_character.gold}gp | Weight: {total_weight:.1f} lbs | Items: {item_count}"
+		draw_text_line(2, header_y, resources, text_col)
+		header_y += 1
+		
+		# Separator line
+		draw_text_line(2, header_y, "=" * (grid_w - 4), dim_col)
+		header_y += 1
+		
+		# Help text - context sensitive
+		if inventory_prompt_mode == 'equip_or_use':
+			help_text = "E: Equip | U: Use | ESC: Cancel"
+		elif inventory_viewing_paperdoll:
+			help_text = "TAB: Navigate Equipment | ENTER: Unequip | ESC/TAB: Back"
+		elif inventory_viewing_container:
+			help_text = "UP/DOWN: Navigate | LEFT/ESC: Back | TAB: View Equipment"
+		else:
+			help_text = "UP/DOWN: Navigate | ENTER: Equip/Open | TAB: View Equipment | ESC: Close"
+		draw_text_line(2, header_y, help_text[:grid_w - 4], dim_col)
+		header_y += 1
+		
+		# === LEFT PANEL: Scrollable Inventory List ===
+		left_x = 2
+		left_y = header_y + 1
+		left_width = 45
+		list_max_height = inventory_max_y - left_y
+		
+		# Build flattened inventory list for display
+		inventory_display_list = []
+		
+		if inventory_viewing_container:
+			# Show container contents
+			selected_item = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+			if selected_item and selected_item.is_container:
+				for i, content_item in enumerate(selected_item.contents):
+					inventory_display_list.append({
+						'type': 'container_item',
+						'index': i,
+						'item': content_item,
+						'selectable': True
+					})
+		else:
+			# Show main 8 slots and optionally expand containers
+			for slot_num in range(CharacterInventory.BASE_SLOTS):
+				item = inv.slots[slot_num]
+				inventory_display_list.append({
+					'type': 'main_slot',
+					'index': slot_num,
+					'item': item,
+					'selectable': True
+				})
+		
+		# Calculate scroll
+		total_items = len(inventory_display_list)
+		if inventory_viewing_container:
+			current_selection = inventory_container_slot
+		else:
+			current_selection = inventory_main_slot
+		
+		# Auto-scroll to keep selection visible
+		if current_selection < inventory_scroll_offset:
+			inventory_scroll_offset = current_selection
+		if current_selection >= inventory_scroll_offset + list_max_height:
+			inventory_scroll_offset = current_selection - list_max_height + 1
+		inventory_scroll_offset = max(0, min(inventory_scroll_offset, max(0, total_items - list_max_height)))
+		
+		# Draw inventory header
+		if inventory_viewing_container:
+			selected_container = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+			if selected_container and selected_container.is_container:
+				header = f"=== {selected_container.name.upper()} ==="
+				draw_text_line(left_x, left_y, header[:left_width], title_col)
+				left_y += 1
+				capacity = f"{selected_container.get_container_info()}"
+				draw_text_line(left_x, left_y, capacity[:left_width], dim_col)
+				left_y += 1
+		else:
+			draw_text_line(left_x, left_y, "=== INVENTORY (8 SLOTS) ===", title_col)
+			left_y += 1
+		
+		draw_text_line(left_x, left_y, "-" * left_width, dim_col)
+		left_y += 1
+		list_start_y = left_y
+		
+		# Draw visible inventory items
+		for i in range(list_max_height):
+			display_index = inventory_scroll_offset + i
+			if display_index >= len(inventory_display_list):
+				break
+			
+			entry = inventory_display_list[display_index]
+			is_selected = (entry['index'] == current_selection and not inventory_viewing_paperdoll)
+			col = highlight_col if is_selected else (text_col if entry['item'] else dim_col)
+			prefix = "> " if is_selected else "  "
+			
+			if entry['item'] is None:
+				line = f"{prefix}[{entry['index']+1}] <empty>"
+			else:
+				item = entry['item']
+				name_display = item.name[:28]
+				if item.is_container:
+					container_info = item.get_container_info()
+					line = f"{prefix}[{entry['index']+1}] {name_display} [{container_info}]"
+				else:
+					weight_str = f"{item.get_effective_weight():.1f}lb"
+					line = f"{prefix}[{entry['index']+1}] {name_display} ({weight_str})"
+			
+			# Draw with bold if selected
+			draw_text_line(left_x, list_start_y + i, line[:left_width], col, bold=is_selected)
+		
+		# Scroll indicators
+		if inventory_scroll_offset > 0:
+			draw_text_line(left_x + left_width - 5, list_start_y - 1, "▲", dim_col)
+		if inventory_scroll_offset + list_max_height < total_items:
+			draw_text_line(left_x + left_width - 5, inventory_max_y, "▼", dim_col)
+		
+		# === RIGHT PANEL: Paperdoll Equipment Slots ===
+		right_x = 50
+		right_y = header_y + 1  # Align with inventory list start
+		right_width = 35
+		
+		draw_text_line(right_x, right_y, "=== EQUIPPED ===", title_col)
+		right_y += 1
+		draw_text_line(right_x, right_y, "-" * right_width, dim_col)
+		right_y += 1
+		
+		# Display equipment slots
+		for i, slot_name in enumerate(CharacterEquipment.SLOT_ORDER):
+			is_selected = (i == inventory_paperdoll_slot and inventory_viewing_paperdoll)
+			equipped_item = equipped.get_equipped_item(slot_name)
+			
+			col = paperdoll_highlight if is_selected else text_col
+			prefix = "> " if is_selected else "  "
+			
+			slot_label = CharacterEquipment.SLOT_DISPLAY_NAMES[slot_name]
+			if equipped_item:
+				item_name = equipped_item.name[:18]
+				line = f"{prefix}{slot_label:13s}: {item_name}"
+			else:
+				line = f"{prefix}{slot_label:13s}: <empty>"
+			
+			# Draw with bold if selected
+			draw_text_line(right_x, right_y + i, line[:right_width], col if equipped_item or is_selected else dim_col, bold=is_selected)
+		
+		# === BOTTOM INFO PANEL (8 lines with border) ===
+		info_x = 2
+		info_y = info_panel_y
+		info_width = grid_w - 4
+		
+		# Border line
+		draw_text_line(info_x, info_y, "-" * info_width, dim_col)
+		info_y += 1
+		
+		# Show appropriate info based on context
+		if inventory_prompt_mode == 'equip_or_use':
+			# Show prompt
+			if inventory_prompt_item:
+				draw_text_line(info_x, info_y, f"Item: {inventory_prompt_item.name}", title_col)
+				info_y += 1
+				draw_text_line(info_x, info_y, "This item can be equipped or used.", text_col)
+				info_y += 1
+				draw_text_line(info_x, info_y, "Press E to Equip, U to Use, or ESC to Cancel.", text_col)
+		
+		elif inventory_viewing_paperdoll:
+			# Show details of selected equipped item
+			slot_name = CharacterEquipment.SLOT_ORDER[inventory_paperdoll_slot]
+			equipped_item = equipped.get_equipped_item(slot_name)
+			
+			if equipped_item:
+				draw_text_line(info_x, info_y, f"=== {equipped_item.name} ===", title_col)
+				info_y += 1
+				draw_text_line(info_x, info_y, f"Category: {equipped_item.category} | Size: {equipped_item.size} | Weight: {equipped_item.get_effective_weight():.1f} lbs", text_col)
+				info_y += 1
+				if equipped_item.damage:
+					draw_text_line(info_x, info_y, f"Damage: {equipped_item.damage}", text_col)
+					info_y += 1
+				if equipped_item.ac is not None:
+					draw_text_line(info_x, info_y, f"AC Modifier: {equipped_item.get_ac_display()}", text_col)
+					info_y += 1
+			else:
+				slot_label = CharacterEquipment.SLOT_DISPLAY_NAMES[slot_name]
+				draw_text_line(info_x, info_y, f"=== {slot_label} ===", title_col)
+				info_y += 1
+				draw_text_line(info_x, info_y, "Nothing equipped in this slot.", dim_col)
+		
+		else:
+			# Show details of selected inventory item
+			if inventory_viewing_container:
+				selected_container = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+				if selected_container and selected_container.is_container and 0 <= inventory_container_slot < len(selected_container.contents):
+					selected_item = selected_container.contents[inventory_container_slot]
+				else:
+					selected_item = None
+			else:
+				selected_item = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+			
+			if selected_item:
+				draw_text_line(info_x, info_y, f"=== {selected_item.name} ===", title_col)
+				info_y += 1
+				
+				info_line = f"Category: {selected_item.category} | Size: {selected_item.size} | Weight: {selected_item.get_effective_weight():.1f} lbs | Value: {selected_item.cost} gp"
+				draw_text_line(info_x, info_y, info_line[:info_width], text_col)
+				info_y += 1
+				
+				if selected_item.is_container:
+					draw_text_line(info_x, info_y, f"Container: {selected_item.slots} slots, max size {selected_item.max_item_size}, {int(selected_item.weight_reduction*100)}% weight reduction", text_col)
+					info_y += 1
+				
+				if selected_item.damage:
+					draw_text_line(info_x, info_y, f"Damage: {selected_item.damage} | Speed: {selected_item.get_speed_display()}", text_col)
+					info_y += 1
+				if selected_item.ac is not None:
+					draw_text_line(info_x, info_y, f"AC Modifier: {selected_item.get_ac_display()}", text_col)
+					info_y += 1
+			else:
+				draw_text_line(info_x, info_y, "=== EMPTY SLOT ===", title_col)
+				info_y += 1
+				draw_text_line(info_x, info_y, "This slot is empty.", dim_col)
 
 	running = True
 	frame_count = 0
@@ -2107,7 +2931,23 @@ def run_pygame():
 						continue
 
 				if event.key == pygame.K_ESCAPE:
-					if menu_open:
+					if inventory_open:
+						# Handle prompt mode first
+						if inventory_prompt_mode == 'equip_or_use':
+							inventory_prompt_mode = None
+							inventory_prompt_item = None
+						# If viewing paperdoll, return to inventory
+						elif inventory_viewing_paperdoll:
+							inventory_viewing_paperdoll = False
+						# If viewing container, close container first
+						elif inventory_viewing_container:
+							inventory_viewing_container = False
+							inventory_container_slot = 0
+						# Otherwise close inventory
+						else:
+							inventory_open = False
+							inventory_scroll_offset = 0
+					elif menu_open:
 						if menu_mode in ('save', 'load'):
 							menu_mode = 'main'
 						elif menu_mode == 'settings':
@@ -2122,7 +2962,24 @@ def run_pygame():
 						load_names = list_saves()
 						load_index = 0
 					continue
-				if event.key == pygame.K_q and not menu_open:
+				
+				# Inventory screen toggle
+				if event.key == pygame.K_i and not menu_open and not inventory_open:
+					if player_character:
+						inventory_open = True
+						inventory_main_slot = 0
+						inventory_viewing_container = False
+						inventory_container_slot = 0
+						inventory_scroll_offset = 0
+						inventory_viewing_paperdoll = False
+						inventory_paperdoll_slot = 0
+						inventory_prompt_mode = None
+						inventory_prompt_item = None
+					else:
+						add_message("No character loaded. Cannot open inventory.")
+					continue
+				
+				if event.key == pygame.K_q and not menu_open and not inventory_open:
 					running = False
 				# Developer hotkey: generate new level 'N'
 				if event.key == pygame.K_n and not menu_open:
@@ -2167,6 +3024,181 @@ def run_pygame():
 							floors_stepped = set((x, y) for (x, y) in floors_stepped
 												if 0 <= x < dungeon.w and 0 <= y < dungeon.h and dungeon.tiles[x][y] == TILE_FLOOR)
 							levels[current_level_index]['floors_stepped'] = floors_stepped
+					continue
+
+				if inventory_open:
+					# Inventory/Equipment navigation with paperdoll
+					if not player_character or not hasattr(player_character, 'inventory'):
+						continue
+					
+					inv = player_character.inventory
+					equipped = player_character.equipped if hasattr(player_character, 'equipped') else CharacterEquipment()
+					
+					# Handle prompt mode first (equip or use disambiguation)
+					if inventory_prompt_mode == 'equip_or_use':
+						if event.key == pygame.K_e:
+							# Equip the item
+							if inventory_prompt_item:
+								old_item = equipped.equip_item(inventory_prompt_item)
+								if old_item:
+									# Swap: put old item in inventory slot where new item was
+									if inventory_viewing_container:
+										selected_container = inv.slots[inventory_main_slot]
+										if selected_container and selected_container.is_container:
+											selected_container.contents[inventory_container_slot] = old_item
+									else:
+										inv.slots[inventory_main_slot] = old_item
+								else:
+									# No swap needed, just remove from inventory
+									if inventory_viewing_container:
+										selected_container = inv.slots[inventory_main_slot]
+										if selected_container and selected_container.is_container:
+											selected_container.contents[inventory_container_slot] = None
+									else:
+										inv.slots[inventory_main_slot] = None
+							inventory_prompt_mode = None
+							inventory_prompt_item = None
+						elif event.key == pygame.K_u:
+							# Use the item (placeholder - implement actual use logic)
+							if inventory_prompt_item:
+								add_message(f"Used {inventory_prompt_item.name}")
+								# TODO: Implement actual item use logic here
+							inventory_prompt_mode = None
+							inventory_prompt_item = None
+						elif event.key == pygame.K_ESCAPE:
+							# Cancel
+							inventory_prompt_mode = None
+							inventory_prompt_item = None
+						continue
+					
+					# TAB - Toggle between inventory and paperdoll navigation
+					if event.key == pygame.K_TAB:
+						if inventory_viewing_paperdoll:
+							# Return to inventory navigation
+							inventory_viewing_paperdoll = False
+						else:
+							# Switch to paperdoll navigation
+							inventory_viewing_paperdoll = True
+							inventory_paperdoll_slot = 0
+						continue
+					
+					# Handle navigation based on current mode
+					if inventory_viewing_paperdoll:
+						# PAPERDOLL NAVIGATION
+						if event.key in (pygame.K_UP, pygame.K_w):
+							inventory_paperdoll_slot = (inventory_paperdoll_slot - 1) % len(CharacterEquipment.SLOT_ORDER)
+						
+						elif event.key in (pygame.K_DOWN, pygame.K_s):
+							inventory_paperdoll_slot = (inventory_paperdoll_slot + 1) % len(CharacterEquipment.SLOT_ORDER)
+						
+						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+							# Unequip item and try to add to inventory
+							slot_name = CharacterEquipment.SLOT_ORDER[inventory_paperdoll_slot]
+							unequipped = equipped.unequip_item(slot_name)
+							if unequipped:
+								if not inv.add_item_auto(unequipped):
+									# Couldn't fit in inventory, re-equip
+									equipped.equip_item(unequipped, slot_name)
+									add_message(f"Inventory full! Cannot unequip {unequipped.name}")
+								else:
+									add_message(f"Unequipped {unequipped.name}")
+					
+					else:
+						# INVENTORY NAVIGATION
+						if event.key in (pygame.K_UP, pygame.K_w):
+							if inventory_viewing_container:
+								# Navigate within container
+								selected_item = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+								if selected_item and selected_item.is_container:
+									inventory_container_slot = max(0, inventory_container_slot - 1)
+							else:
+								# Navigate main slots
+								inventory_main_slot = max(0, inventory_main_slot - 1)
+						
+						elif event.key in (pygame.K_DOWN, pygame.K_s):
+							if inventory_viewing_container:
+								# Navigate within container
+								selected_item = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+								if selected_item and selected_item.is_container:
+									inventory_container_slot = min(len(selected_item.contents) - 1, inventory_container_slot + 1)
+							else:
+								# Navigate main slots
+								inventory_main_slot = min(CharacterInventory.BASE_SLOTS - 1, inventory_main_slot + 1)
+						
+						elif event.key == pygame.K_LEFT:
+							# LEFT arrow - Close container and return to main inventory
+							if inventory_viewing_container:
+								inventory_viewing_container = False
+								inventory_container_slot = 0
+						
+						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+							# ENTER - Open container OR equip/use item
+							if inventory_viewing_container:
+								# In container - try to equip/use item
+								selected_container = inv.slots[inventory_main_slot]
+								if selected_container and selected_container.is_container:
+									selected_item = selected_container.contents[inventory_container_slot]
+									if selected_item:
+										# Check if equippable and/or usable
+										is_equippable = selected_item.equippable
+										is_usable = selected_item.usable_from_inventory
+										
+										if is_equippable and is_usable:
+											# Show prompt
+											inventory_prompt_mode = 'equip_or_use'
+											inventory_prompt_item = selected_item
+										elif is_equippable:
+											# Just equip
+											old_item = equipped.equip_item(selected_item)
+											if old_item:
+												selected_container.contents[inventory_container_slot] = old_item
+											else:
+												selected_container.contents[inventory_container_slot] = None
+											add_message(f"Equipped {selected_item.name}")
+										elif is_usable:
+											# Just use
+											add_message(f"Used {selected_item.name}")
+											# TODO: Implement use logic
+										elif selected_item.is_container:
+											# Open nested container (future feature)
+											add_message("Nested containers not yet supported")
+							else:
+								# In main inventory
+								selected_item = inv.slots[inventory_main_slot] if 0 <= inventory_main_slot < len(inv.slots) else None
+								if selected_item:
+									if selected_item.is_container:
+										# Open container
+										inventory_viewing_container = True
+										inventory_container_slot = 0
+									else:
+										# Try to equip/use
+										is_equippable = selected_item.equippable
+										is_usable = selected_item.usable_from_inventory
+										
+										if is_equippable and is_usable:
+											# Show prompt
+											inventory_prompt_mode = 'equip_or_use'
+											inventory_prompt_item = selected_item
+										elif is_equippable:
+											# Just equip
+											old_item = equipped.equip_item(selected_item)
+											if old_item:
+												inv.slots[inventory_main_slot] = old_item
+											else:
+												inv.slots[inventory_main_slot] = None
+											add_message(f"Equipped {selected_item.name}")
+										elif is_usable:
+											# Just use
+											add_message(f"Used {selected_item.name}")
+											# TODO: Implement use logic
+						
+						# Number keys for quick slot selection
+						elif event.key >= pygame.K_1 and event.key <= pygame.K_8:
+							slot_num = event.key - pygame.K_1
+							inventory_main_slot = slot_num
+							inventory_viewing_container = False
+							inventory_container_slot = 0
+					
 					continue
 
 				if menu_open:
@@ -2307,27 +3339,28 @@ def run_pygame():
 								# simple error display in title line
 								pass
 						continue
-				# If we reach here and menu not open, handle game controls
-				dx = dy = 0
-				if event.key == pygame.K_w:
-					dy = -1
-				elif event.key == pygame.K_s:
-					dy = 1
-			
-				elif event.key == pygame.K_a:
-					dx = -1
-				elif event.key == pygame.K_d:
-					dx = 1
-				if dx != 0 or dy != 0:
-					nx, ny = px + dx, py + dy
-					if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h:
-						if debug_noclip or not dungeon.is_wall(nx, ny):
-							px, py = nx, ny
-							# Track floors stepped-on
-							if dungeon.tiles[px][py] == TILE_FLOOR and (px, py) not in floors_stepped:
-								floors_stepped.add((px, py))
-								if levels and 0 <= current_level_index < len(levels):
-									levels[current_level_index]['floors_stepped'] = floors_stepped
+				# If we reach here and menu/inventory not open, handle game controls
+				if not inventory_open:
+					dx = dy = 0
+					if event.key == pygame.K_w:
+						dy = -1
+					elif event.key == pygame.K_s:
+						dy = 1
+				
+					elif event.key == pygame.K_a:
+						dx = -1
+					elif event.key == pygame.K_d:
+						dx = 1
+					if dx != 0 or dy != 0:
+						nx, ny = px + dx, py + dy
+						if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h:
+							if debug_noclip or not dungeon.is_wall(nx, ny):
+								px, py = nx, ny
+								# Track floors stepped-on
+								if dungeon.tiles[px][py] == TILE_FLOOR and (px, py) not in floors_stepped:
+									floors_stepped.add((px, py))
+									if levels and 0 <= current_level_index < len(levels):
+										levels[current_level_index]['floors_stepped'] = floors_stepped
 
 		# Update visibility after input
 		if debug_show_all_visible:
@@ -2345,6 +3378,51 @@ def run_pygame():
 				# Animate world FoW reveal similarly
 				if wr_reveal[ex][ey] < 1.0:
 					wr_reveal[ex][ey] = clamp(wr_reveal[ex][ey] + dt * reveal_rate, 0.0, 1.0)
+
+		# Update dungeon fade-in
+		if not dungeon_fade_complete:
+			dungeon_fade_alpha = min(1.0, dungeon_fade_alpha + dt / dungeon_fade_duration)
+			if dungeon_fade_alpha >= 1.0:
+				dungeon_fade_complete = True
+				# Start ambient sounds after fade completes
+				if ambience_player and not ambience_started:
+					print("[AUDIO] Starting ambient sounds...")
+					ambience_player.start()
+					ambience_started = True
+					add_message("Ambient sounds activated.")
+					print(f"[AUDIO] Ambience active: {ambience_player.active}")
+				
+				# Start dungeon music after fade completes
+				if not music_started:
+					try:
+						import tempfile
+						music_player = get_music_player()
+						songs_path = os.path.join(os.path.dirname(__file__), "songs.json")
+						
+						# Load songs.json and extract dungeon_depths
+						with open(songs_path, 'r') as f:
+							songs = json.load(f)
+						
+						# Create temporary file with just the dungeon_depths song
+						temp_song = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+						json.dump(songs["dungeon_depths"], temp_song)
+						temp_song.close()
+						
+						print("[AUDIO] Starting dungeon music (dungeon_depths)...")
+						music_player.play_song(temp_song.name, loops=-1, fade_ms=3000)
+						
+						# Clean up temp file
+						os.unlink(temp_song.name)
+						
+						music_started = True
+						add_message("Dungeon music started.")
+					except Exception as e:
+						print(f"[AUDIO] Could not start dungeon music: {e}")
+						music_started = True  # Don't keep retrying
+
+		# Update ambient sounds (only if started)
+		if ambience_player and ambience_started:
+			ambience_player.update(pygame.time.get_ticks())
 
 		# Compute reachable floors once per frame for exploration logic
 		reachable_this_frame = compute_reachable_floors(dungeon, px, py)
@@ -2755,16 +3833,31 @@ def run_pygame():
 				draw_text_line(0, 14 + i, line, ui_color, UI_COLS, use_ui_font=True)
 
 		# Minimap (after UI/world)
-		if not menu_open:
+		if not menu_open and not inventory_open:
 			draw_minimap(screen, dungeon, explored, visible, px, py)
 
+		# Draw inventory if open
+		if inventory_open:
+			draw_inventory_slotbased()
 		# Draw menu last if open
-		if menu_open:
+		elif menu_open:
 			draw_menu()
+
+		# Apply dungeon fade-in overlay (fade from black to transparent)
+		if not dungeon_fade_complete:
+			fade_overlay = pygame.Surface((win_w, win_h))
+			fade_overlay.fill((0, 0, 0))
+			fade_alpha = int(255 * (1.0 - dungeon_fade_alpha))  # Invert: start at 255 (opaque black), end at 0 (transparent)
+			fade_overlay.set_alpha(fade_alpha)
+			screen.blit(fade_overlay, (0, 0))
 
 		pygame.display.flip()
 		clock.tick(FPS)
 		frame_count += 1
+
+	# Cleanup when game loop exits
+	if ambience_player:
+		ambience_player.stop()
 
 
 def count_doors(dungeon):
