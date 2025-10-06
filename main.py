@@ -1552,6 +1552,54 @@ def run_pygame():
 	fov = FOV(dungeon)
 	explored = set()
 
+	# Secret discovery system with varying difficulty levels
+	# Each floor tile has a 1% chance of having a secret
+	tile_secrets = {}  # (x, y) -> difficulty DC (5, 10, 15, 20, 25)
+	tile_search_progress = {}  # (x, y) -> seconds of accumulated search time
+	tile_search_alpha = {}  # (x, y) -> visual fade-in alpha (0.0 to 1.0) for secret tiles
+	revealed_secrets = set()  # set of (x, y) for found secrets
+	
+	# Gradual illumination system - all visible tiles gradually brighten
+	tile_illumination_progress = {}  # (x, y) -> seconds of accumulated illumination time
+	tile_illumination_alpha = {}  # (x, y) -> illumination alpha (0.0 to 1.0)
+	
+	# Secret difficulty distribution (weighted towards easier secrets)
+	# DC 5 = Trivial (impossible to miss with any perception)
+	# DC 10 = Easy (most characters will find)
+	# DC 15 = Normal (requires some perception)
+	# DC 20 = Hard (requires good perception or lucky roll)
+	# DC 25 = Very Hard (requires excellent perception and good roll)
+	difficulty_weights = [
+		(5, 30),   # 30% trivial
+		(10, 35),  # 35% easy
+		(15, 20),  # 20% normal
+		(20, 10),  # 10% hard
+		(25, 5),   # 5% very hard
+	]
+	
+	# Generate secrets for floor tiles (1% chance)
+	for y in range(dungeon.h):
+		for x in range(dungeon.w):
+			if not dungeon.is_wall(x, y):  # Only floor tiles can have secrets
+				if random.random() < 0.01:  # 1% chance
+					# Randomly assign difficulty based on weights
+					roll = random.randint(1, 100)
+					cumulative = 0
+					difficulty = 15  # Default
+					for dc, weight in difficulty_weights:
+						cumulative += weight
+						if roll <= cumulative:
+							difficulty = dc
+							break
+					tile_secrets[(x, y)] = difficulty
+					tile_search_alpha[(x, y)] = 0.0  # Start with no visual enhancement
+	
+	# Count secrets by difficulty
+	secret_counts = {}
+	for dc in tile_secrets.values():
+		secret_counts[dc] = secret_counts.get(dc, 0) + 1
+	print(f"[SECRETS] Generated {len(tile_secrets)} secrets: {secret_counts}")
+
 	# Brick exploration tracking for pygame mode
 	bricks_touched = set()  # set of (x,y) brick wall tiles lit at least once
 	total_bricks = count_total_bricks(dungeon)
@@ -3424,6 +3472,79 @@ def run_pygame():
 		if ambience_player and ambience_started:
 			ambience_player.update(pygame.time.get_ticks())
 
+		# Update secret searching and gradual illumination for tiles in light radius
+		if player_character and dungeon_fade_complete:
+			# Calculate perception modifier from wisdom (D&D style: (score - 10) / 2)
+			wisdom_mod = (player_character.wisdom - 10) // 2
+			# Base search time is 3 seconds, reduced by perception modifier
+			# Each +1 wisdom mod reduces search time by 0.2 seconds (min 1 second)
+			base_search_time = 3.0
+			search_time_required = max(1.0, base_search_time - (wisdom_mod * 0.2))
+			
+			# Check all tiles in light radius
+			for (vx, vy) in visible:
+				# Update gradual illumination for ALL visible tiles
+				if (vx, vy) not in tile_illumination_alpha:
+					tile_illumination_alpha[(vx, vy)] = 0.0
+					tile_illumination_progress[(vx, vy)] = 0.0
+				
+				# Only illuminate if not already at full brightness
+				if tile_illumination_alpha[(vx, vy)] < 1.0:
+					tile_illumination_progress[(vx, vy)] += dt
+					# Calculate illumination alpha based on time (same as search time)
+					progress_ratio = min(1.0, tile_illumination_progress[(vx, vy)] / search_time_required)
+					tile_illumination_alpha[(vx, vy)] = progress_ratio
+				# Update visual fade-in for all visible tiles with secrets (even revealed ones)
+				if (vx, vy) in tile_secrets:
+					if (vx, vy) not in tile_search_alpha:
+						tile_search_alpha[(vx, vy)] = 0.0
+					
+					# Only accumulate search progress for unrevealed secrets
+					if (vx, vy) not in revealed_secrets:
+						# Accumulate search time
+						if (vx, vy) not in tile_search_progress:
+							tile_search_progress[(vx, vy)] = 0.0
+						
+						tile_search_progress[(vx, vy)] += dt
+						
+						# Update visual alpha based on search progress (0.0 to 1.0)
+						progress_ratio = min(1.0, tile_search_progress[(vx, vy)] / search_time_required)
+						tile_search_alpha[(vx, vy)] = progress_ratio
+						
+						# Check if tile is fully searched
+						if tile_search_progress[(vx, vy)] >= search_time_required:
+							# Get difficulty DC for this secret
+							secret_dc = tile_secrets[(vx, vy)]
+							
+							# Roll perception check: d20 + wisdom modifier vs secret DC
+							perception_roll = random.randint(1, 20) + wisdom_mod
+							
+							if perception_roll >= secret_dc:
+								# Secret found!
+								revealed_secrets.add((vx, vy))
+								tile_search_alpha[(vx, vy)] = 1.0  # Fully bright
+								
+								# Difficulty label for message
+								difficulty_labels = {5: "trivial", 10: "easy", 15: "normal", 20: "hard", 25: "very hard"}
+								difficulty_label = difficulty_labels.get(secret_dc, "unknown")
+								
+								add_message(f"You discovered a {difficulty_label} secret! (Roll: {perception_roll} vs DC {secret_dc})")
+								print(f"[SECRETS] Found secret at ({vx}, {vy}) - Roll: {perception_roll}, DC: {secret_dc} ({difficulty_label})")
+								
+								# Play coin sound
+								if sound_generator:
+									try:
+										coin_sound = sound_generator.generate_coin_sound()
+										coin_sound.set_volume(0.6)
+										coin_sound.play()
+									except Exception as e:
+										print(f"[SECRETS] Could not play coin sound: {e}")
+							else:
+								# Failed perception check, but tile is fully searched
+								print(f"[SECRETS] Searched ({vx}, {vy}) but didn't find secret - Roll: {perception_roll}, DC: {secret_dc}")
+								# Keep visual alpha at maximum to show it was searched
+								tile_search_alpha[(vx, vy)] = 1.0
+
 		# Compute reachable floors once per frame for exploration logic
 		reachable_this_frame = compute_reachable_floors(dungeon, px, py)
 
@@ -3525,6 +3646,31 @@ def run_pygame():
 						
 						# Apply lighting to the material color
 						color = scale_color(base_color, tval)
+						
+						# Apply gradual illumination - tiles start dim and brighten over time
+						if (wx, wy) in tile_illumination_alpha:
+							illum_alpha = tile_illumination_alpha[(wx, wy)]
+							# Start at 20% brightness, fade up to 100% over search time
+							min_brightness = 0.2
+							illum_multiplier = min_brightness + (1.0 - min_brightness) * illum_alpha
+							color = scale_color(color, illum_multiplier)
+						
+						# Apply search progress visual enhancement (for tiles with secrets)
+						if (wx, wy) in tile_search_alpha:
+							search_alpha = tile_search_alpha[(wx, wy)]
+							if search_alpha > 0.0:
+								# Gradually brighten and add a subtle golden tint as search progresses
+								# Boost brightness by up to 40% at full search
+								brightness_boost = 1.0 + (0.4 * search_alpha)
+								color = scale_color(color, brightness_boost)
+								
+								# Add subtle golden tint (more pronounced as search progresses)
+								gold_tint = int(30 * search_alpha)  # Up to +30 to red/green channels
+								color = (
+									min(255, color[0] + gold_tint),
+									min(255, color[1] + int(gold_tint * 0.8)),  # Slightly less green for gold
+									color[2]  # No blue boost
+								)
 						
 						# Enhanced directional boost for walls: stronger effect
 						if tile == TILE_WALL:
@@ -3662,6 +3808,29 @@ def run_pygame():
 			gx = off_x + (UI_COLS + 1 + pcx) * cell_w + (cell_w - surf.get_width()) // 2
 			gy = off_y + pcy * cell_h + (cell_h - surf.get_height()) // 2
 			screen.blit(surf, (gx, gy))
+
+		# Draw revealed secrets as glowing "S"
+		for (secret_x, secret_y) in revealed_secrets:
+			# Calculate screen position relative to player
+			sx = secret_x - px + view_w // 2
+			sy = secret_y - py + view_h // 2
+			
+			# Only draw if within viewport
+			if 0 <= sx < view_w and 0 <= sy < view_h:
+				# Create pulsing glow effect using frame counter
+				pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 200.0)
+				# Gold color with pulsing brightness
+				glow_color = (
+					int(255 * pulse),
+					int(215 * pulse),
+					int(0 * pulse)
+				)
+				
+				# Draw the "S" character
+				secret_surf = render_glyph('S', glow_color)
+				gx = off_x + (UI_COLS + 1 + sx) * cell_w + (cell_w - secret_surf.get_width()) // 2
+				gy = off_y + sy * cell_h + (cell_h - secret_surf.get_height()) // 2
+				screen.blit(secret_surf, (gx, gy))
 
 		# HUD (optional)
 		if SETTINGS.get('hud_text', True) and not menu_open:

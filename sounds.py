@@ -388,6 +388,38 @@ class SoundGenerator:
 		
 		return self._samples_to_sound(samples)
 	
+	def generate_coin_sound(self):
+		"""Generate metallic coin clink sound.
+		
+		Returns:
+			pygame.Sound object
+		"""
+		duration = random.uniform(0.3, 0.5)
+		num_samples = int(self.sample_rate * duration)
+		t = np.linspace(0, duration, num_samples, False)
+		
+		# Multiple high metallic frequencies for coin sound
+		freq1 = random.uniform(3000, 4000)
+		freq2 = random.uniform(4500, 5500)
+		freq3 = random.uniform(6000, 7000)
+		
+		# Create bright metallic tone
+		samples = (
+			0.5 * np.sin(2 * np.pi * freq1 * t) +
+			0.3 * np.sin(2 * np.pi * freq2 * t) +
+			0.2 * np.sin(2 * np.pi * freq3 * t)
+		)
+		
+		# Add slight jingle with quick decay
+		jingle_freq = random.uniform(7000, 9000)
+		jingle = 0.15 * np.sin(2 * np.pi * jingle_freq * t)
+		samples = samples + jingle
+		
+		# Sharp attack, quick decay for metallic coin clink
+		samples = self.apply_envelope(samples, attack=0.01, decay=0.3, sustain=0.2, release=0.5)
+		
+		return self._samples_to_sound(samples)
+	
 	def _samples_to_sound(self, samples):
 		"""Convert numpy samples to pygame.Sound.
 		
