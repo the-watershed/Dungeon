@@ -1,0 +1,24 @@
+{
+  "name": "qQWE1",
+  "race": "Human",
+  "class": "Fighter",
+  "level": 1,
+  "xp": 0,
+  "strength": 11,
+  "dexterity": 13,
+  "constitution": 11,
+  "intelligence": 15,
+  "wisdom": 10,
+  "charisma": 15,
+  "max_hp": 3,
+  "current_hp": 3,
+  "armor_class": 10,
+  "thac0": 20,
+  "alignment": "Lawful Good",
+  "gold": 4,
+  "equipment": [
+    "Dagger"
+  ],
+  "weight_carried": 1.0,
+  "racial_abilities": []
+}

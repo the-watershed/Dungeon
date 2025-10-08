@@ -12,6 +12,7 @@ import random
 import pygame
 from typing import Dict, List, Optional, Tuple
 from parchment_renderer import ParchmentRenderer
+from sounds import get_water_drip_sfx
 
 # Character Class
 class Character:
@@ -245,8 +246,8 @@ class CharacterCreatorGUI:
         pygame.display.set_caption("AD&D 2nd Edition Character Creator")
         self.clock = pygame.time.Clock()
         
-        # Start playing Mystic Forest music at 50% volume
-        self._start_music()
+        # Suspend dungeon water-drip SFX while the character creator is open
+        self._suspend_drip_sfx()
         
         # Build font using game's font system (single font size like the game)
         self.font = self._build_font(CELL_HEIGHT)
@@ -257,38 +258,21 @@ class CharacterCreatorGUI:
         parchment_renderer.build_layers(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.parchment_bg = parchment_renderer.generate(WINDOW_WIDTH, WINDOW_HEIGHT)
     
-    def _start_music(self):
-        """Start playing Mystic Forest music at 50% volume"""
+    def _suspend_drip_sfx(self):
+        """Pause the global water-drip scheduler so it only plays in-game."""
+        self.drip_sfx = None
         try:
-            import os
-            import json
-            import tempfile
-            
-            # Get the music player from parent directory
-            sys.path.insert(0, os.path.dirname(__file__))
-            from music import get_music_player
-            
-            self.music_player = get_music_player()
-            
-            # Load Mystic Forest song from songs.json
-            songs_path = os.path.join(os.path.dirname(__file__), "songs.json")
-            with open(songs_path, 'r') as f:
-                songs = json.load(f)
-            
-            # Create temporary file with just the Mystic Forest theme
-            temp_song = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-            json.dump(songs["mystic_forest"], temp_song)
-            temp_song.close()
-            
-            # Play with 2 second fade in at 50% volume
-            self.music_player.set_volume(0.5)
-            self.music_player.play_song(temp_song.name, loops=-1, fade_ms=2000)
-            
-            # Clean up temp file
-            os.unlink(temp_song.name)
+            player = get_water_drip_sfx()
+            if player and getattr(player, 'active', False):
+                player.stop()
+            self.drip_sfx = player
         except Exception as e:
-            print(f"Could not load music: {e}")
-            self.music_player = None
+            print(f"Could not adjust water-drip SFX: {e}")
+            self.drip_sfx = None
+
+    def _update_drip_sfx(self):
+        if self.drip_sfx and getattr(self.drip_sfx, 'active', False):
+            self.drip_sfx.update(pygame.time.get_ticks())
     
     def _build_font(self, ch_h: int) -> pygame.font.Font:
         """Build optimal font for given cell height (matches game's font building).
@@ -363,6 +347,7 @@ class CharacterCreatorGUI:
                     if event.key == pygame.K_ESCAPE:
                         return False
                     return True
+            self._update_drip_sfx()
             self.clock.tick(60)
         return False
     
@@ -401,6 +386,7 @@ class CharacterCreatorGUI:
                     elif event.unicode and len(input_text) < max_length:
                         input_text += event.unicode
             
+            self._update_drip_sfx()
             self.clock.tick(60)
         
         return None
@@ -461,6 +447,7 @@ class CharacterCreatorGUI:
                     elif event.key == pygame.K_ESCAPE:
                         return None
             
+            self._update_drip_sfx()
             self.clock.tick(60)
     
     def show_info_screen(self, title, lines, wait_for_key=True):
@@ -1059,12 +1046,10 @@ def run_character_creator():
         creator = CharacterCreatorGUI()
         character = creator.run()
         
-        # Stop music with fade out
-        if hasattr(creator, 'music_player') and creator.music_player:
-            creator.music_player.stop(fade_ms=2000)
-            # Wait for fade to complete
-            import time
-            time.sleep(2)
+        # Leave drip SFX stopped; gameplay loop will resume scheduling when appropriate
+        drip_sfx = getattr(creator, 'drip_sfx', None)
+        if drip_sfx:
+            drip_sfx.stop()
         
         pygame.quit()
         return character

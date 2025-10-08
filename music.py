@@ -125,6 +125,23 @@ class MusicPlayer:
 		pygame.mixer.music.play(loops=loops, fade_ms=fade_ms)
 		
 		self.current_song = song_def.get("title", "Unknown")
+
+	def play_midi_file(self, midi_path, loops=-1, fade_ms=0, volume=None):
+		"""Play an existing MIDI file from disk.
+
+		Args:
+			midi_path: Path to the MIDI file to play
+			loops: Number of times to loop (-1 = infinite)
+			fade_ms: Fade in duration in milliseconds
+			volume: Optional volume override (0.0 to 1.0)
+		"""
+		if not os.path.isfile(midi_path):
+			raise FileNotFoundError(f"MIDI file not found: {midi_path}")
+		pygame.mixer.music.load(midi_path)
+		if volume is not None:
+			pygame.mixer.music.set_volume(max(0.0, min(1.0, float(volume))))
+		pygame.mixer.music.play(loops=loops, fade_ms=fade_ms)
+		self.current_song = os.path.basename(midi_path)
 	
 	def stop(self, fade_ms=0):
 		"""Stop the currently playing music.

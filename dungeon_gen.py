@@ -148,7 +148,8 @@ class Dungeon:
 		# Doors grid, stores DOOR_OPEN, DOOR_CLOSED, etc. A value of -1 means no door.
 		self.doors: List[List[int]] = [[-1 for _ in range(h)] for _ in range(w)]
 		self.rooms: List[Rect] = []
-		self.throne_room_index: int = -1  # Index of the throne room in self.rooms list
+		self.start_room_index: int = 0  # Index of the start room (always first room)
+		self.throne_room_index: int = -1  # Index of the throne room/exit (always last room)
 
 	def carve_room(self, room: Rect) -> None:
 		"""Carve out a rectangular room in the dungeon.
@@ -370,7 +371,8 @@ class Dungeon:
 	def _setup_throne_room(self) -> None:
 		"""Mark the last room as a throne room and give it special materials."""
 		if len(self.rooms) > 0:
-			# The last room becomes the throne room
+			# The last room becomes the throne room (EXIT)
+			self.start_room_index = 0  # First room is START
 			self.throne_room_index = len(self.rooms) - 1
 			throne_room = self.rooms[self.throne_room_index]
 			
@@ -947,10 +949,41 @@ def generate_dungeon(
 		rnd_state = random.getstate()
 		random.seed(seed)
 	try:
-		d = Dungeon(width, height)
+		# For linear layouts, ensure dungeon is large enough to fit all rooms
 		max_rooms = max(1, int(length))
+		if linearity >= 0.5:
+			# Calculate minimum space needed: each room needs ~12 tiles in linear layout
+			space_per_room = room_max + 8
+			if width > height:
+				# Horizontal linear layout
+				min_width = max_rooms * space_per_room
+				if width < min_width:
+					width = min(250, min_width + 20)
+					print(f"[DUNGEON] Expanded width to {width} to fit {max_rooms} rooms")
+			else:
+				# Vertical linear layout
+				min_height = max_rooms * space_per_room
+				if height < min_height:
+					height = min(250, min_height + 20)
+					print(f"[DUNGEON] Expanded height to {height} to fit {max_rooms} rooms")
+		
+		d = Dungeon(width, height)
 		d.generate(max_rooms=max_rooms, room_min=room_min, room_max=room_max, linearity=linearity, entropy=entropy)
 
+		# VALIDATION: Report room generation results
+		print(f"[DUNGEON] Generated {len(d.rooms)} rooms (requested: {length})")
+		if len(d.rooms) < length * 0.9:  # Less than 90% of requested
+			print(f"[DUNGEON] WARNING: Only generated {len(d.rooms)}/{length} rooms ({int(len(d.rooms)/length*100)}%)")
+		
+		# VALIDATION: Verify Start and Exit rooms
+		if d.start_room_index == 0 and d.throne_room_index == len(d.rooms) - 1:
+			start_center = d.rooms[0].center()
+			exit_center = d.rooms[-1].center()
+			print(f"[DUNGEON] START room: #0 at ({start_center[0]}, {start_center[1]})")
+			print(f"[DUNGEON] EXIT room: #{d.throne_room_index} at ({exit_center[0]}, {exit_center[1]})")
+		else:
+			print(f"[DUNGEON] WARNING: Start or Exit room not properly designated")
+		
 		# Extra connections based on complexity: link random room pairs
 		# But skip ALL extra connections if linearity is high (we want a pure chain)
 		if linearity <= 0.5:  # Only add extra connections at very low linearity

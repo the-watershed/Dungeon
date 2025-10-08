@@ -3,7 +3,9 @@ Procedural sound generation for dungeon ambience.
 Creates atmospheric sounds like rats, bats, water droplets, and metal squeaking.
 """
 
+import os
 import pygame
+import pygame.sndarray
 import numpy as np
 import random
 import math
@@ -486,78 +488,175 @@ class SoundGenerator:
 		return list(self.sounds.keys())
 
 
-class AmbiencePlayer:
-	"""Manages ambient sound playback with random timing."""
-	
+class WaterDripSFX:
+	"""Scheduler that plays the water-drip MP3 purely as a positional-style sound effect."""
+
 	def __init__(self, sound_generator):
-		"""Initialize ambience player.
-		
-		Args:
-			sound_generator: SoundGenerator instance
-		"""
 		self.generator = sound_generator
 		self.active = False
-		self.ambience_config = {
-			'rat_squeak': {'probability': 0.05, 'volume': 0.5},
-			'rat_scurry': {'probability': 0.03, 'volume': 0.475},
-			'bat_screech': {'probability': 0.04, 'volume': 0.475},
-			'bat_wings': {'probability': 0.03, 'volume': 0.45},
-			'water_drip': {'probability': 0.08, 'volume': 0.5},
-			'water_echo': {'probability': 0.02, 'volume': 0.475},
-			'metal_creak': {'probability': 0.02, 'volume': 0.5},
-			'chain_rattle': {'probability': 0.01, 'volume': 0.475},
-			'distant_howl': {'probability': 0.005, 'volume': 0.35},
-			'stone_scrape': {'probability': 0.01, 'volume': 0.45},
-		}
-		self.last_check = 0
-		self.check_interval = 1000  # Check every 1000ms
-	
-	def update(self, current_time):
-		"""Update ambience (call each frame).
-		
-		Args:
-			current_time: Current time in milliseconds
-		"""
-		if not self.active:
+		self.master_volume = 0.5
+		self.interval_range = (9000, 18000)
+		self.next_play_time = 0
+		self.sample_rate = 22050
+		self.channels = 2
+		self.base_array = None
+		self.output_scale = float(np.iinfo(np.int16).max)
+		self._active_sounds: list[tuple[pygame.mixer.Sound, pygame.mixer.Channel]] = []
+		self._load_base_sample()
+
+	def _load_base_sample(self):
+		"""Load the static water drip sample from disk."""
+		init = pygame.mixer.get_init()
+		if init:
+			self.sample_rate = init[0]
+		path = os.path.join(os.path.dirname(__file__), 'resources', 'sounds', 'water_drip.mp3')
+		if not os.path.isfile(path):
+			raise FileNotFoundError(f"Missing water-drip sample: {path}")
+		base_sound = pygame.mixer.Sound(path)
+		array = pygame.sndarray.array(base_sound)
+		if array.ndim == 1:
+			array = array[:, np.newaxis]
+		array = array.astype(np.float32)
+		max_val = float(np.max(np.abs(array)))
+		if max_val == 0:
+			max_val = 1.0
+		self.base_array = array / max_val
+		self.channels = self.base_array.shape[1]
+
+	def _resample_pitch(self, samples: np.ndarray, pitch_factor: float) -> np.ndarray:
+		"""Change pitch by resampling the waveform."""
+		pitch_factor = max(0.5, min(2.0, pitch_factor))
+		orig_len = samples.shape[0]
+		target_len = max(1, int(round(orig_len / pitch_factor)))
+		orig_idx = np.arange(orig_len)
+		target_idx = np.linspace(0, orig_len - 1, target_len)
+		resampled = np.zeros((target_len, self.channels), dtype=np.float32)
+		for ch in range(self.channels):
+			resampled[:, ch] = np.interp(target_idx, orig_idx, samples[:, ch])
+		return resampled
+
+	def _apply_reverb(self, samples: np.ndarray, decay: float, pre_delay_ms: float, wet_mix: float) -> np.ndarray:
+		"""Apply a diffused cave reverb with early reflections and a soft tail."""
+		wet_mix = max(0.0, min(0.7, wet_mix))
+		pre_delay_samples = max(0, int(self.sample_rate * (pre_delay_ms / 1000.0)))
+		reverb_seconds = 0.9 + decay * 1.1  # tie decay to tail length
+		tail_samples = max(1, int(self.sample_rate * reverb_seconds))
+		output_len = samples.shape[0] + pre_delay_samples + tail_samples
+		output = np.zeros((output_len, self.channels), dtype=np.float32)
+
+		# Dry signal
+		dry_mix = 1.0 - wet_mix * 0.4
+		output[:samples.shape[0]] += samples * dry_mix
+
+		# Early reflections with slight diffusion instead of discrete echoes
+		ref_base_ms = max(25.0, pre_delay_ms)
+		reflection_offsets = [ref_base_ms * 0.6, ref_base_ms, ref_base_ms + 32.0, ref_base_ms + 67.0]
+		reflection_gains = [0.35, 0.3, 0.22, 0.16]
+		for offset_ms, gain in zip(reflection_offsets, reflection_gains):
+			offset_samples = int(self.sample_rate * (offset_ms / 1000.0))
+			start = offset_samples
+			end = start + samples.shape[0]
+			if end > output_len:
+				break
+			output[start:end] += samples * (wet_mix * gain)
+
+		# Diffuse tail using filtered noise shaped by exponential decay
+		tail_start = samples.shape[0] + pre_delay_samples
+		tail_noise = np.random.normal(0.0, 0.02, (tail_samples, self.channels)).astype(np.float32)
+		# Gentle low-pass filter to mimic cavern absorption
+		kernel = np.array([0.18, 0.25, 0.28, 0.18, 0.11], dtype=np.float32)
+		for ch in range(self.channels):
+			tail_noise[:, ch] = np.convolve(tail_noise[:, ch], kernel, mode='same')
+		time_axis = np.linspace(0.0, reverb_seconds, tail_samples, dtype=np.float32)
+		envelope = np.exp(-time_axis / max(0.25, decay * 1.75))
+		tail_noise *= envelope[:, np.newaxis] * (wet_mix * 0.55)
+		end_idx = tail_start + tail_samples
+		if end_idx > output_len:
+			tail_noise = tail_noise[:output_len - tail_start]
+			tail_samples = tail_noise.shape[0]
+		output[tail_start:tail_start + tail_samples] += tail_noise
+
+		return output
+
+	def _prepare_variant(self) -> pygame.mixer.Sound:
+		if self.base_array is None:
+			raise RuntimeError("Water-drip sample not loaded")
+		pitch = random.uniform(0.94, 1.05)
+		reverb_decay = random.uniform(0.55, 0.8)
+		pre_delay = random.uniform(85, 150)
+		wet_mix = random.uniform(0.38, 0.52)
+		samples = self._resample_pitch(self.base_array, pitch)
+		samples = self._apply_reverb(samples, reverb_decay, pre_delay, wet_mix)
+		samples = np.clip(samples, -1.0, 1.0)
+		int_samples = (samples * self.output_scale).astype(np.int16, copy=False)
+		return pygame.sndarray.make_sound(int_samples)
+
+	def _cleanup_finished(self):
+		if not self._active_sounds:
 			return
-		
-		if current_time - self.last_check >= self.check_interval:
-			self.last_check = current_time
-			
-			# Check each sound type
-			for sound_type, config in self.ambience_config.items():
-				if random.random() < config['probability']:
-					self.generator.play_random(sound_type, config['volume'])
-					print(f"[AMBIENCE] Playing {sound_type} at volume {config['volume']}")
-	
+		alive = []
+		for sound, channel in self._active_sounds:
+			if channel and channel.get_busy():
+				alive.append((sound, channel))
+		self._active_sounds = alive
+
+	def _schedule_next(self, current_time: int):
+		base_interval = random.randint(*self.interval_range)
+		jitter = random.uniform(0.75, 1.35)
+		self.next_play_time = current_time + int(base_interval * jitter)
+
+	def _play_drip(self, current_time: int):
+		variant = self._prepare_variant()
+		channel = variant.play()
+		if channel:
+			channel.set_volume(self.master_volume)
+			self._active_sounds.append((variant, channel))
+		self._schedule_next(current_time)
+
+	def update(self, current_time):
+		"""Update drip scheduler; should be called each frame."""
+		self._cleanup_finished()
+		if not self.active or self.base_array is None:
+			return
+		if self.next_play_time == 0:
+			self._schedule_next(current_time)
+		elif current_time >= self.next_play_time:
+			self._play_drip(current_time)
+
 	def start(self):
-		"""Start playing ambient sounds."""
+		"""Enable randomized playback of the sound effect."""
 		self.active = True
-		# Ensure enough channels for simultaneous sounds
 		pygame.mixer.set_num_channels(16)
-		print(f"[AMBIENCE] Started! Mixer status: {pygame.mixer.get_init()}")
-		# Play a test sound immediately to verify audio is working
-		self.generator.play_random('water_drip', 0.8)
-		print("[AMBIENCE] Test sound played (water drip)")
-	
+		current_time = pygame.time.get_ticks()
+		warmup_delay = random.randint(750, 1750)
+		self.next_play_time = current_time + warmup_delay
+
 	def stop(self):
-		"""Stop playing ambient sounds."""
+		"""Disable drip playback and halt active sounds."""
 		self.active = False
-	
-	def set_sound_probability(self, sound_type, probability):
-		"""Adjust probability of a sound type.
-		
-		Args:
-			sound_type: Name of sound type
-			probability: Probability per check (0.0 to 1.0)
-		"""
-		if sound_type in self.ambience_config:
-			self.ambience_config[sound_type]['probability'] = probability
+		self.next_play_time = 0
+		for _, channel in self._active_sounds:
+			if channel:
+				channel.stop()
+		self._active_sounds.clear()
+
+	def set_master_volume(self, value: float):
+		"""Adjust ambient playback volume (0.0 to 1.0)."""
+		self.master_volume = max(0.0, min(1.0, float(value)))
+		for _, channel in self._active_sounds:
+			if channel:
+				channel.set_volume(self.master_volume)
+
+	def set_interval_range(self, minimum_ms: int, maximum_ms: int):
+		"""Override the interval range between ambience plays."""
+		minimum_ms = max(250, int(minimum_ms))
+		maximum_ms = max(minimum_ms + 1, int(maximum_ms))
+		self.interval_range = (minimum_ms, maximum_ms)
 
 
 # Global instance
 _sound_generator = None
-_ambience_player = None
+_water_drip_sfx = None
 
 def get_sound_generator():
 	"""Get the global sound generator instance."""
@@ -567,11 +666,11 @@ def get_sound_generator():
 		_sound_generator.pregenerate_sounds(variations_per_type=3)
 	return _sound_generator
 
-def get_ambience_player():
-	"""Get the global ambience player instance."""
-	global _ambience_player, _sound_generator
-	if _ambience_player is None:
+def get_water_drip_sfx():
+	"""Get the global water-drip sound effect scheduler."""
+	global _water_drip_sfx, _sound_generator
+	if _water_drip_sfx is None:
 		if _sound_generator is None:
 			_sound_generator = get_sound_generator()
-		_ambience_player = AmbiencePlayer(_sound_generator)
-	return _ambience_player
+		_water_drip_sfx = WaterDripSFX(_sound_generator)
+	return _water_drip_sfx

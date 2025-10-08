@@ -52,6 +52,17 @@ def load_settings(path: str) -> dict:
 		"dungeon_room_max": 12,
 		"dungeon_base_width": 60,  # base dungeon width
 		"dungeon_base_height": 40,  # base dungeon height
+		# Audio settings
+		"music_volume": 0.7,  # 0.0 to 1.0
+		"sound_volume": 0.8,  # 0.0 to 1.0
+		# Visual settings
+		"show_gold_glow": True,  # Gold glow on fully searched areas
+		"render_mode": "blocks",  # blocks | ascii
+		"lighting_quality": "high",  # low | medium | high
+		# Gameplay settings
+		"auto_search": False,  # Automatically search when standing still
+		"show_damage_numbers": True,  # Show damage/heal numbers
+		"confirm_quit": True,  # Confirm before quitting
 		"minimap": {
 			"enabled": True,
 			"tile": 4,        # pixels per dungeon tile on minimap
@@ -82,6 +93,7 @@ DARK_CH = SETTINGS.get('dark', ' ')
 
 # Save directory
 SAVE_DIR = os.path.join(os.path.dirname(__file__), 'saves')
+LAST_CHARACTER_FILE = os.path.join(SAVE_DIR, 'last_character.json')
 
 LIGHT_RADIUS = 5  # tiles
 FPS = 30
@@ -119,6 +131,13 @@ WATER_BLUE = (50, 110, 170)
 LAVA_ORANGE = (208, 84, 32)
 MARBLE_WHITE = (220, 220, 228)
 WOOD_BROWN = (136, 94, 62)
+
+# Torch rendering and lighting constants
+TORCH_LIGHT_RADIUS = 3.0
+TORCH_BASE_INTENSITY = 0.9
+TORCH_FLAME_COLOR = (255, 196, 112)
+TORCH_EMBER_COLOR = (255, 140, 60)
+TORCH_SCONCE_COLOR = (120, 90, 60)
 
 # Material -> base color mapping (render-agnostic; used by all renderers)
 def base_color_for_material(mat: int) -> tuple[int, int, int]:
@@ -282,6 +301,7 @@ def clamp(v: float, a: float, b: float) -> float:
 from dungeon_gen import Dungeon, Rect, TILE_WALL, TILE_FLOOR, generate_dungeon, MAT_COBBLE, MAT_BRICK, MAT_DIRT, MAT_MOSS, MAT_SAND, MAT_IRON, MAT_GRASS, MAT_WATER, MAT_LAVA, MAT_MARBLE, MAT_WOOD, TILE_DOOR, DOOR_CLOSED, DOOR_OPEN, DOOR_LOCKED
 from prefab_loader import load_prefabs
 from parchment_renderer import ParchmentRenderer
+from sounds import get_sound_generator, get_water_drip_sfx
 from music import get_music_player
 # ---------------------------
 # Save/Load helpers
@@ -654,6 +674,141 @@ def sanitize_name(name: str) -> str:
 	return name[:40] if name else "player"
 
 
+def set_last_character_name(name: str) -> None:
+	"""Persist the most recently used character name for quick loading.
+
+	Args:
+		name (str): Character/save name to remember.
+	"""
+	sanitized = sanitize_name(name)
+	if not sanitized:
+		return
+	try:
+		os.makedirs(SAVE_DIR, exist_ok=True)
+		payload = {"name": sanitized, "timestamp": time.time()}
+		with open(LAST_CHARACTER_FILE, 'w', encoding='utf-8') as f:
+			json.dump(payload, f)
+	except Exception:
+		# Failing to persist the last character shouldn't break gameplay.
+		pass
+
+
+def get_last_character_record() -> Optional[dict]:
+	"""Return the persisted last-character metadata if present."""
+	try:
+		with open(LAST_CHARACTER_FILE, 'r', encoding='utf-8') as f:
+			data = json.load(f)
+		if isinstance(data, dict):
+			name = data.get('name')
+			if isinstance(name, str):
+				data['name'] = sanitize_name(name)
+				return data
+	except Exception:
+		pass
+	return None
+
+
+def get_last_character_name() -> Optional[str]:
+	"""Retrieve the most recently persisted character name, if any."""
+	record = get_last_character_record()
+	if record:
+		name = record.get('name')
+		if isinstance(name, str) and name:
+			return name
+	return None
+
+
+def save_exists(name: str) -> bool:
+	"""Check whether a sanitized save file exists on disk."""
+	if not name:
+		return False
+	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
+	return os.path.isfile(path)
+
+
+def load_character_profile_snapshot(name: str):
+	"""Attempt to reconstruct a character profile from a saved JSON file."""
+	if not name:
+		return None
+	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
+	if not os.path.isfile(path):
+		return None
+	try:
+		with open(path, 'r', encoding='utf-8') as f:
+			data = json.load(f)
+	except Exception:
+		return None
+	if not isinstance(data, dict) or 'levels' in data:
+		# Session saves overwrite the character sheet; nothing to load.
+		return None
+	try:
+		from char_gui import Character
+	except Exception:
+		return None
+	character = Character()
+	field_map = {
+		'name': 'name',
+		'race': 'race',
+		'class': 'char_class',
+		'alignment': 'alignment',
+		'level': 'level',
+		'xp': 'xp',
+		'strength': 'strength',
+		'dexterity': 'dexterity',
+		'constitution': 'constitution',
+		'intelligence': 'intelligence',
+		'wisdom': 'wisdom',
+		'charisma': 'charisma',
+		'max_hp': 'max_hp',
+		'current_hp': 'current_hp',
+		'armor_class': 'armor_class',
+		'thac0': 'thac0',
+		'gold': 'gold',
+		'weight_carried': 'weight_carried',
+	}
+	for key, attr in field_map.items():
+		if key in data:
+			setattr(character, attr, data[key])
+	if isinstance(data.get('equipment'), list):
+		character.equipment = list(data['equipment'])
+	if isinstance(data.get('racial_abilities'), list):
+		character.racial_abilities = list(data['racial_abilities'])
+	return character
+
+
+def get_most_recent_save_name() -> Optional[str]:
+	"""Find the newest save file by modification time."""
+	if not os.path.isdir(SAVE_DIR):
+		return None
+	latest_name: Optional[str] = None
+	latest_mtime = -1.0
+	for fn in os.listdir(SAVE_DIR):
+		if not fn.lower().endswith('.json'):
+			continue
+		path = os.path.join(SAVE_DIR, fn)
+		try:
+			mtime = os.path.getmtime(path)
+		except OSError:
+			continue
+		if mtime > latest_mtime:
+			latest_mtime = mtime
+			latest_name = os.path.splitext(fn)[0]
+	return latest_name
+
+
+def default_load_index(load_names: list[str]) -> int:
+	"""Choose the default selection index for the load menu."""
+	if not load_names:
+		return 0
+	last_name = get_last_character_name()
+	if last_name and last_name in load_names:
+		return load_names.index(last_name)
+	recent = get_most_recent_save_name()
+	if recent and recent in load_names:
+		return load_names.index(recent)
+	return 0
+
+
 def save_session(name: str, dungeon: 'Dungeon', explored: set, px: int, py: int, levels: list | None = None, current_index: int = 0) -> str:
 	"""Save current game session to disk as JSON file.
 	
@@ -671,9 +826,11 @@ def save_session(name: str, dungeon: 'Dungeon', explored: set, px: int, py: int,
 	"""
 	os.makedirs(SAVE_DIR, exist_ok=True)
 	data = session_to_dict(dungeon, explored, px, py, levels=levels, current_index=current_index)
-	path = os.path.join(SAVE_DIR, f"{sanitize_name(name)}.json")
+	sanitized = sanitize_name(name)
+	path = os.path.join(SAVE_DIR, f"{sanitized}.json")
 	with open(path, 'w', encoding='utf-8') as f:
 		json.dump(data, f)
+	set_last_character_name(sanitized)
 	return path
 
 
@@ -696,6 +853,65 @@ def load_session(name: str) -> tuple['Dungeon', set, int, int, list, int]:
 	return dict_to_session(data)
 
 
+def hydrate_levels_from_save(levels_payload: list[dict], current_index: int) -> tuple[list[dict], int, 'Dungeon', set[tuple[int, int]], int, int, set[tuple[int, int]], int, set[tuple[int, int]], set[tuple[int, int]], set[tuple[int, int]], int, int, list[dict]]:
+	"""Convert serialized level payloads into live runtime structures."""
+	new_levels: list[dict] = []
+	for level in levels_payload:
+		dungeon_tiles = decode_tiles(level['tiles'])
+		dungeon_tiles = decode_materials(dungeon_tiles, level.get('materials', []))
+		explored = set(tuple(pt) for pt in level.get('explored', []))
+		player_pos = level.get('player', [1, 1])
+		px = int(player_pos[0]) if player_pos else 1
+		py = int(player_pos[1]) if player_pos else 1
+		bricks = set(tuple(pt) for pt in level.get('bricks_touched', []))
+		total_bricks = int(level.get('total_bricks', count_total_bricks(dungeon_tiles)))
+		walls = set(tuple(pt) for pt in level.get('walls_touched', []))
+		floors = set(tuple(pt) for pt in level.get('floors_touched', []))
+		floors_stepped = set(tuple(pt) for pt in level.get('floors_stepped', []))
+		total_walls = int(level.get('total_walls', count_total_walls(dungeon_tiles)))
+		total_floors = int(level.get('total_floors', count_total_floors(dungeon_tiles)))
+		torch_payload = level.get('torches')
+		if torch_payload is None:
+			torch_payload = serialize_torches(generate_wall_torches(dungeon_tiles))
+		torches = deserialize_torches(torch_payload)
+		new_levels.append({
+			'dungeon': dungeon_tiles,
+			'explored': explored,
+			'player': (px, py),
+			'bricks_touched': bricks,
+			'total_bricks': total_bricks,
+			'walls_touched': walls,
+			'floors_touched': floors,
+			'floors_stepped': floors_stepped,
+			'total_walls': total_walls,
+			'total_floors': total_floors,
+			'torches': serialize_torches(torches),
+		})
+
+	if not new_levels:
+		raise ValueError('Empty save payload')
+
+	idx = max(0, min(int(current_index), len(new_levels) - 1))
+	current_level = new_levels[idx]
+	current_torches = deserialize_torches(current_level['torches'])
+	return (
+		new_levels,
+		idx,
+		current_level['dungeon'],
+		current_level['explored'],
+		int(current_level['player'][0]),
+		int(current_level['player'][1]),
+		current_level['bricks_touched'],
+		int(current_level['total_bricks']),
+		current_level['walls_touched'],
+		current_level['floors_touched'],
+		current_level['floors_stepped'],
+		int(current_level['total_walls']),
+		int(current_level['total_floors']),
+		current_torches,
+	)
+
+
 def list_saves() -> list[str]:
 	"""Get list of available save files.
 	
@@ -710,6 +926,122 @@ def list_saves() -> list[str]:
 			files.append(os.path.splitext(fn)[0])
 	files.sort()
 	return files
+
+
+def create_torch(x: int, y: int, direction: tuple[int, int]) -> dict:
+	"""Create a runtime torch descriptor with flicker phase and intensity."""
+	dx, dy = direction
+	if dx == 0 and dy == 0:
+		direction = (0, 1)
+	phase = random.uniform(0.0, math.tau)
+	return {
+		'x': int(x),
+		'y': int(y),
+		'dir': (int(direction[0]), int(direction[1])),
+		'radius': TORCH_LIGHT_RADIUS,
+		'base_intensity': TORCH_BASE_INTENSITY,
+		'phase': phase,
+	}
+
+
+def rebuild_torch_lookup(torch_list: list[dict]) -> dict[tuple[int, int], dict]:
+	"""Create a quick lookup dictionary for torches keyed by tile position."""
+	return {(torch['x'], torch['y']): torch for torch in torch_list}
+
+
+def serialize_torches(torch_list: list[dict]) -> list[dict]:
+	"""Convert runtime torch descriptors into JSON-friendly dictionaries."""
+	serialized = []
+	for torch in torch_list:
+		dir_vec = torch.get('dir', (0, 1))
+		serialized.append({
+			'x': int(torch.get('x', 0)),
+			'y': int(torch.get('y', 0)),
+			'dir': [int(dir_vec[0]), int(dir_vec[1])],
+		})
+	return serialized
+
+
+def deserialize_torches(data: list[dict]) -> list[dict]:
+	"""Create runtime torch descriptors from serialized data."""
+	torches: list[dict] = []
+	if not data:
+		return torches
+	for entry in data:
+		if not isinstance(entry, dict):
+			continue
+		x = entry.get('x')
+		y = entry.get('y')
+		if x is None or y is None:
+			continue
+		dir_raw = entry.get('dir') or entry.get('direction') or (0, 1)
+		if isinstance(dir_raw, (list, tuple)) and len(dir_raw) == 2:
+			dir_vec = (int(dir_raw[0]), int(dir_raw[1]))
+		else:
+			dir_vec = (0, 1)
+		torches.append(create_torch(int(x), int(y), dir_vec))
+	return torches
+
+
+def generate_wall_torches(dungeon: Dungeon, max_per_room: int = 2, placement_chance: float = 0.45) -> list[dict]:
+	"""Place decorative torches on select room walls."""
+	torches: list[dict] = []
+	occupied: set[tuple[int, int]] = set()
+
+	def is_near_existing(pos: tuple[int, int]) -> bool:
+		px, py = pos
+		for existing in torches:
+			ex, ey = existing['x'], existing['y']
+			if abs(ex - px) + abs(ey - py) <= 1:
+				return True
+		return False
+
+	for room in dungeon.rooms:
+		candidates: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+		def consider(wx: int, wy: int, direction: tuple[int, int]) -> None:
+			ix, iy = wx + direction[0], wy + direction[1]
+			if not (0 <= wx < dungeon.w and 0 <= wy < dungeon.h):
+				return
+			if not (0 <= ix < dungeon.w and 0 <= iy < dungeon.h):
+				return
+			tile = dungeon.tiles[wx][wy]
+			interior_tile = dungeon.tiles[ix][iy]
+			if tile != TILE_WALL:
+				return
+			if interior_tile == TILE_WALL or interior_tile == TILE_DOOR:
+				return
+			candidates.append(((wx, wy), direction))
+
+		# Room bounds minus corners to avoid exterior walls
+		for x in range(room.x1 + 1, room.x2 - 1):
+			consider(x, room.y1, (0, 1))      # top wall facing down
+			consider(x, room.y2 - 1, (0, -1))  # bottom wall facing up
+		for y in range(room.y1 + 1, room.y2 - 1):
+			consider(room.x1, y, (1, 0))       # left wall facing right
+			consider(room.x2 - 1, y, (-1, 0))  # right wall facing left
+
+		if not candidates:
+			continue
+
+		random.shuffle(candidates)
+		room_w = max(1, room.x2 - room.x1 - 2)
+		room_h = max(1, room.y2 - room.y1 - 2)
+		room_capacity = 1 if min(room_w, room_h) < 4 else max_per_room
+		placed = 0
+		for (pos, direction) in candidates:
+			if placed >= room_capacity:
+				break
+			if pos in occupied or is_near_existing(pos):
+				continue
+			if random.random() > placement_chance:
+				continue
+			torch = create_torch(pos[0], pos[1], direction)
+			torches.append(torch)
+			occupied.add(pos)
+			placed += 1
+
+	return torches
 
 
 # Field of View via symmetrical shadowcasting (8 octants)
@@ -1369,29 +1701,19 @@ def show_splash_screen():
 	
 	# Calculate center position
 	text_rect = text_surface_full.get_rect(center=(win_w // 2, win_h // 2))
-	
-	# Start playing A-Team theme with fade in
-	music_player = get_music_player()
-	songs_path = os.path.join(os.path.dirname(__file__), "songs.json")
+
+	# Start intro music (Title.mid) while the splash screen is visible
 	try:
-		# Load songs.json and extract just the a_team_theme
-		import json
-		with open(songs_path, 'r') as f:
-			songs = json.load(f)
-		
-		# Create temporary file with just the A-Team theme
-		import tempfile
-		temp_song = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-		json.dump(songs["a_team_theme"], temp_song)
-		temp_song.close()
-		
-		# Play with 3 second fade in
-		music_player.play_song(temp_song.name, loops=-1, fade_ms=3000)
-		
-		# Clean up temp file
-		os.unlink(temp_song.name)
+		title_music_path = os.path.join(os.path.dirname(__file__), 'resources', 'sounds', 'Title.mid')
+		if os.path.isfile(title_music_path):
+			intro_volume = SETTINGS.get('music_volume', 0.7)
+			music_player = get_music_player()
+			music_player.play_midi_file(title_music_path, loops=-1, fade_ms=1500, volume=intro_volume)
+		else:
+			print(f"[AUDIO] Title music not found at {title_music_path}")
 	except Exception as e:
-		print(f"Could not load music: {e}")
+		print(f"[AUDIO] Could not start intro music: {e}")
+	
 	
 	# Combined loop: delay, fade in, then wait indefinitely
 	clock = pygame.time.Clock()
@@ -1412,13 +1734,12 @@ def show_splash_screen():
 		# Process events
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
-				music_player.stop()
 				pygame.quit()
 				return False
 			if event.type == pygame.KEYDOWN:
 				waiting = False
 				break
-		
+
 		# Draw background
 		screen.blit(splash_bg, (0, 0))
 		
@@ -1456,10 +1777,109 @@ def show_splash_screen():
 		clock.tick(60)
 		frame += 1
 	
-	# Fade out music when leaving splash screen
-	music_player.stop(fade_ms=1000)
+	# Ambient audio continues into character creator/game without interruption
 	
 	return True
+
+
+def prompt_load_last_character(name: str, last_played_ts: Optional[float] = None) -> bool:
+	"""Show a modal prompt asking whether to resume the last saved character."""
+	import pygame
+
+	screen = pygame.display.get_surface()
+	if screen is None:
+		# Fallback: ensure a window exists if splash was skipped somehow.
+		screen = pygame.display.set_mode((BASE_WIN_W, BASE_WIN_H))
+
+	clock = pygame.time.Clock()
+	pygame.event.clear()
+	pygame.mouse.set_visible(True)
+
+	win_w, win_h = screen.get_size()
+	panel_w, panel_h = min(520, win_w - 80), 240
+	panel_rect = pygame.Rect(0, 0, panel_w, panel_h)
+	panel_rect.center = (win_w // 2, win_h // 2)
+
+	bg_surface = pygame.Surface((win_w, win_h))
+	bg_surface.fill(WORLD_BG)
+	overlay = pygame.Surface((win_w, win_h), pygame.SRCALPHA)
+	overlay.fill((0, 0, 0, 120))
+
+	font_path = os.path.join(os.path.dirname(__file__), "Blocky Sketch.ttf")
+	try:
+		title_font = pygame.font.Font(font_path, 34)
+	except Exception:
+		title_font = pygame.font.Font(None, 38)
+	text_font = pygame.font.Font(None, 24)
+	button_font = pygame.font.Font(None, 26)
+
+	last_played_text = None
+	if last_played_ts:
+		try:
+			stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(last_played_ts))
+			last_played_text = f"Last ventured: {stamp}"
+		except Exception:
+			last_played_text = None
+
+	def draw_prompt(yes_color=WALL_LIGHT, no_color=WALL_LIGHT):
+		screen.blit(bg_surface, (0, 0))
+		screen.blit(overlay, (0, 0))
+		pygame.draw.rect(screen, (52, 44, 38), panel_rect)
+		pygame.draw.rect(screen, WALL_LIGHT, panel_rect, 3)
+
+		title = title_font.render(f"Resume {name}'s journey?", True, (240, 230, 210))
+		title_rect = title.get_rect(center=(panel_rect.centerx, panel_rect.top + 50))
+		screen.blit(title, title_rect)
+
+		sub_lines = [
+			"Press Y to load your last save.",
+			"Press N to forge a new hero.",
+		]
+		if last_played_text:
+			sub_lines.insert(0, last_played_text)
+		for i, line in enumerate(sub_lines):
+			text = text_font.render(line, True, (210, 200, 180))
+			rect = text.get_rect(center=(panel_rect.centerx, panel_rect.top + 105 + i * 26))
+			screen.blit(text, rect)
+
+		yes_text = "[Y] Resume adventure"
+		no_text = "[N] Start fresh"
+		yes_surface = button_font.render(yes_text, True, yes_color)
+		no_surface = button_font.render(no_text, True, no_color)
+		yes_rect = yes_surface.get_rect(center=(panel_rect.centerx - panel_rect.width // 4, panel_rect.bottom - 45))
+		no_rect = no_surface.get_rect(center=(panel_rect.centerx + panel_rect.width // 4, panel_rect.bottom - 45))
+		screen.blit(yes_surface, yes_rect)
+		screen.blit(no_surface, no_rect)
+		return yes_rect, no_rect
+
+	yes_rect, no_rect = draw_prompt()
+	pygame.display.flip()
+
+	while True:
+		mouse_pos = pygame.mouse.get_pos()
+		yes_hover = yes_rect.collidepoint(mouse_pos)
+		no_hover = no_rect.collidepoint(mouse_pos)
+
+		yes_color = (255, 240, 200) if yes_hover else WALL_LIGHT
+		no_color = (255, 240, 200) if no_hover else WALL_LIGHT
+		yes_rect, no_rect = draw_prompt(yes_color=yes_color, no_color=no_color)
+		pygame.display.flip()
+
+		for event in pygame.event.get():
+			if event.type == pygame.QUIT:
+				return False
+			if event.type == pygame.KEYDOWN:
+				if event.key in (pygame.K_y, pygame.K_RETURN, pygame.K_SPACE):
+					return True
+				if event.key in (pygame.K_n, pygame.K_ESCAPE):
+					return False
+			if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+				if yes_rect.collidepoint(event.pos):
+					return True
+				if no_rect.collidepoint(event.pos):
+					return False
+
+		clock.tick(60)
 
 def run_pygame():
 	try:
@@ -1475,25 +1895,61 @@ def run_pygame():
 		pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
 		pygame.mixer.set_num_channels(16)  # Allow multiple sounds simultaneously
 	print(f"[AUDIO] Pygame mixer initialized: {pygame.mixer.get_init()}")
+	
+	# Apply initial volume settings from config
+	music_vol = SETTINGS.get('music_volume', 0.7)
+	pygame.mixer.music.set_volume(music_vol)
+	print(f"[AUDIO] Music volume set to {int(music_vol * 100)}%")
 
 	# Show splash screen first
 	if not show_splash_screen():
 		return
 
-	# Launch character creator at startup
-	player_character = None
+	# Ensure dungeon music plays across character creator and gameplay scenes
+	music_player = None
+	dungeon_music_path = os.path.join(os.path.dirname(__file__), 'resources', 'sounds', 'Dungeon.mid')
 	try:
-		from char_gui import run_character_creator
-		player_character = run_character_creator()
-		if not player_character:
-			print("Character creation cancelled. Exiting game.")
-			return
-		print(f"Welcome, {player_character.name}! Starting your adventure...")
+		if not os.path.isfile(dungeon_music_path):
+			raise FileNotFoundError(dungeon_music_path)
+		music_player = get_music_player()
+		if not music_player.is_playing():
+			music_player.play_midi_file(dungeon_music_path, loops=-1, fade_ms=3000, volume=music_vol)
 	except Exception as e:
-		print(f"Error launching character creator: {e}")
-		import traceback
-		traceback.print_exc()
-		print("Starting game without character...")
+		print(f"[AUDIO] Could not start dungeon music: {e}")
+
+	startup_session: Optional[tuple] = None
+	startup_save_name: Optional[str] = None
+	startup_character = None
+
+	last_record = get_last_character_record()
+	if last_record:
+		candidate_name = last_record.get('name')
+		candidate_ts = last_record.get('timestamp') if isinstance(last_record.get('timestamp'), (int, float)) else None
+		if candidate_name and save_exists(candidate_name):
+			if prompt_load_last_character(candidate_name, candidate_ts):
+				try:
+					startup_session = load_session(candidate_name)
+					startup_save_name = candidate_name
+					startup_character = load_character_profile_snapshot(candidate_name)
+					print(f"[LOAD] Resuming last save '{candidate_name}'.")
+				except Exception as e:
+					print(f"[LOAD] Failed to load save '{candidate_name}': {e}")
+
+	# Launch character creator at startup
+	player_character = startup_character
+	if startup_session is None:
+		try:
+			from char_gui import run_character_creator
+			player_character = run_character_creator()
+			if not player_character:
+				print("Character creation cancelled. Exiting game.")
+				return
+			print(f"Welcome, {player_character.name}! Starting your adventure...")
+		except Exception as e:
+			print(f"Error launching character creator: {e}")
+			import traceback
+			traceback.print_exc()
+			print("Starting game without character...")
 
 	random.seed()
 
@@ -1518,39 +1974,106 @@ def run_pygame():
 		'linearity': SETTINGS.get('dungeon_linearity', 1.0),
 		'entropy': SETTINGS.get('dungeon_entropy', 0.0),
 	}
-	dungeon = generate_dungeon(**dungeon_params)
+	levels: list[dict] = []
+	current_level_index = 0
+	using_loaded_save = False
 
-	# Place player at center of first room, ensuring they're on a floor tile
-	if dungeon.rooms:
-		room = dungeon.rooms[0]
-		px, py = room.center()
-		
-		# Ensure player starts on a floor tile within the room
-		if dungeon.is_wall(px, py):
-			# Search for a floor tile within the room bounds
-			found = False
-			for x in range(room.x1 + 1, room.x2 - 1):
-				for y in range(room.y1 + 1, room.y2 - 1):
+	dungeon: Optional[Dungeon] = None
+	explored: set[tuple[int, int]] = set()
+	px = py = 1
+	bricks_touched: set[tuple[int, int]] = set()
+	total_bricks = 0
+	walls_touched: set[tuple[int, int]] = set()
+	floors_touched: set[tuple[int, int]] = set()
+	floors_stepped: set[tuple[int, int]] = set()
+	total_walls = 0
+	total_floors = 0
+	torches: list[dict] = []
+	torch_lookup: dict[tuple[int, int], dict] = {}
+
+	if startup_session is not None:
+		try:
+			_, _, _, _, levels_payload, idx = startup_session
+			(levels, current_level_index, dungeon, explored, px, py,
+			 bricks_touched, total_bricks, walls_touched, floors_touched,
+			 floors_stepped, total_walls, total_floors, torches) = hydrate_levels_from_save(levels_payload, idx)
+			torch_lookup = rebuild_torch_lookup(torches)
+			using_loaded_save = True
+			if startup_save_name:
+				set_last_character_name(startup_save_name)
+		except Exception as e:
+			print(f"[LOAD] Save data was invalid, starting new dungeon: {e}")
+			startup_session = None
+			if player_character is None:
+				try:
+					from char_gui import run_character_creator
+					player_character = run_character_creator()
+					if not player_character:
+						print("Character creation cancelled. Exiting game.")
+						return
+					print(f"Welcome, {player_character.name}! Starting your adventure...")
+				except Exception as creator_error:
+					print(f"Error launching character creator after failed load: {creator_error}")
+					import traceback
+					traceback.print_exc()
+					print("Continuing without character...")
+
+	if not using_loaded_save or dungeon is None:
+		dungeon = generate_dungeon(**dungeon_params)
+		print(f"[DUNGEON] Generated {len(dungeon.rooms)} rooms (requested: {dungeon_params['length']})")
+		# Place player at center of first room, ensuring they're on a floor tile
+		if dungeon.rooms:
+			room = dungeon.rooms[0]
+			px, py = room.center()
+			if dungeon.is_wall(px, py):
+				found = False
+				for x in range(room.x1 + 1, room.x2 - 1):
+					for y in range(room.y1 + 1, room.y2 - 1):
+						if not dungeon.is_wall(x, y):
+							px, py = x, y
+							found = True
+							break
+					if found:
+						break
+		else:
+			px = py = 1
+			for y in range(dungeon.h):
+				for x in range(dungeon.w):
 					if not dungeon.is_wall(x, y):
 						px, py = x, y
-						found = True
 						break
-				if found:
-					break
+				else:
+					continue
+				break
+		explored = set()
+		bricks_touched = set()
+		walls_touched = set()
+		floors_touched = set()
+		floors_stepped = set()
+		torches = generate_wall_torches(dungeon)
+		torch_lookup = rebuild_torch_lookup(torches)
+		levels = []
+		current_level_index = 0
+		total_bricks = count_total_bricks(dungeon)
+		reachable = compute_reachable_floors(dungeon, px, py)
+		total_floors = len(reachable)
+		total_walls = count_total_exposed_walls(dungeon, reachable)
 	else:
-		# fallback: find any floor
-		px = py = 1
-		for y in range(dungeon.h):
-			for x in range(dungeon.w):
-				if not dungeon.is_wall(x, y):
-					px, py = x, y
-					break
-			else:
-				continue
-			break
+		print(f"[LOAD] Loaded dungeon with {len(dungeon.rooms)} rooms from save.")
+		reachable = compute_reachable_floors(dungeon, px, py)
+		if not total_floors:
+			total_floors = len(reachable)
+		if not total_walls:
+			total_walls = count_total_exposed_walls(dungeon, reachable)
+		if not total_bricks:
+			total_bricks = count_total_bricks(dungeon)
+		if not torches:
+			torches = generate_wall_torches(dungeon)
+			torch_lookup = rebuild_torch_lookup(torches)
+		else:
+			torch_lookup = rebuild_torch_lookup(torches)
 
 	fov = FOV(dungeon)
-	explored = set()
 
 	# Secret discovery system with varying difficulty levels
 	# Each floor tile has a 1% chance of having a secret
@@ -1558,10 +2081,12 @@ def run_pygame():
 	tile_search_progress = {}  # (x, y) -> seconds of accumulated search time
 	tile_search_alpha = {}  # (x, y) -> visual fade-in alpha (0.0 to 1.0) for secret tiles
 	revealed_secrets = set()  # set of (x, y) for found secrets
+	tile_secrets_checked = set()  # set of (x, y) for secrets that have had their perception check rolled
 	
 	# Gradual illumination system - all visible tiles gradually brighten
 	tile_illumination_progress = {}  # (x, y) -> seconds of accumulated illumination time
 	tile_illumination_alpha = {}  # (x, y) -> illumination alpha (0.0 to 1.0)
+	tile_illumination_source = {}  # (x, y) -> 'player' or 'torch'
 	
 	# Secret difficulty distribution (weighted towards easier secrets)
 	# DC 5 = Trivial (impossible to miss with any perception)
@@ -1601,18 +2126,37 @@ def run_pygame():
 	print(f"[SECRETS] Generated {len(tile_secrets)} secrets: {secret_counts}")
 
 	# Brick exploration tracking for pygame mode
-	bricks_touched = set()  # set of (x,y) brick wall tiles lit at least once
-	total_bricks = count_total_bricks(dungeon)
+	if not using_loaded_save:
+		bricks_touched = set()
+		total_bricks = count_total_bricks(dungeon)
+	else:
+		bricks_touched = set(bricks_touched)
+		if not total_bricks:
+			total_bricks = count_total_bricks(dungeon)
 
 	# Wall/floor exploration tracking for pygame mode
-	walls_touched = set()
-	floors_touched = set()
-	# Floors actually stepped on by the player (for exploration %)
-	floors_stepped = set()
+	if not using_loaded_save:
+		walls_touched = set()
+		floors_touched = set()
+		floors_stepped = set()
+	else:
+		walls_touched = set(walls_touched)
+		floors_touched = set(floors_touched)
+		floors_stepped = set(floors_stepped)
+
 	# Use reachable floors from player and exposed walls for fair totals
 	reachable = compute_reachable_floors(dungeon, px, py)
-	total_floors = len(reachable)
-	total_walls = count_total_exposed_walls(dungeon, reachable)
+	if not total_floors:
+		total_floors = len(reachable)
+	if not total_walls:
+		total_walls = count_total_exposed_walls(dungeon, reachable)
+
+	# Static ambient light sources (wall torches)
+	if not torches:
+		torches = generate_wall_torches(dungeon)
+	torch_lookup = rebuild_torch_lookup(torches)
+	if levels and 0 <= current_level_index < len(levels):
+		levels[current_level_index]['torches'] = serialize_torches(torches)
 
 	# Debug toggles/state
 	debug_mode = False            # Ctrl+D toggles
@@ -2043,6 +2587,84 @@ def run_pygame():
 		for i, text in enumerate(lines):
 			draw_text_line(x_cells + 1, y_cells + 1 + i, ("- " + text)[:width_cells - 2], scale_color(MARBLE_WHITE, 0.92), width_cells - 2)
 
+	def prepare_light_sources(player_x: int, player_y: int, radius: float, torch_list: list[dict], ticks: int) -> list[dict]:
+		"""Build a list of dynamic light sources for the current frame."""
+		sources: list[dict] = [{
+			'pos': (player_x, player_y),
+			'radius': max(1.0, float(radius)),
+			'intensity': 1.0,
+			'falloff': 'quadratic',
+			'is_torch': False,
+		}]
+		for torch in torch_list:
+			base = torch.get('base_intensity', TORCH_BASE_INTENSITY)
+			phase = torch.get('phase', 0.0)
+			flicker = 0.82 + 0.18 * math.sin(0.006 * ticks + phase)
+			intensity = base * flicker
+			torch['current_intensity'] = intensity
+			sources.append({
+				'pos': (torch['x'], torch['y']),
+				'radius': torch.get('radius', TORCH_LIGHT_RADIUS),
+				'intensity': intensity,
+				'falloff': 'quadratic',
+				'is_torch': True,
+		})
+		return sources
+
+	def evaluate_light_sources(sources: list[dict], wx: int, wy: int) -> tuple[float, Optional[tuple[int, int]]]:
+		"""Compute brightness contribution from light sources at given tile."""
+		best_val = 0.0
+		best_pos: Optional[tuple[int, int]] = None
+		for src in sources:
+			sx, sy = src['pos']
+			dx = wx - sx
+			dy = wy - sy
+			dist = math.hypot(dx, dy)
+			radius = src['radius']
+			if dist > radius:
+				continue
+			if radius <= 1e-6:
+				continue
+			falloff = src.get('falloff', 'quadratic')
+			if src.get('is_torch'):
+				if dist > radius:
+					continue
+				norm = dist / radius
+				val = src['intensity'] * max(0.0, 1.0 - norm * norm)
+			elif falloff == 'linear':
+				norm = dist / radius
+				val = src['intensity'] * max(0.0, 1.0 - norm)
+			else:
+				norm = dist / radius
+				val = src['intensity'] * max(0.0, 1.0 - norm * norm)
+			if dist <= 0.5:
+				val = max(val, src['intensity'])
+			if val > best_val:
+				best_val = val
+				best_pos = (sx, sy)
+		return best_val, best_pos
+
+	def draw_torch_overlay(cell_x: int, cell_y: int, torch: dict) -> None:
+		"""Render a small torch flame and sconce overlay in block mode."""
+		intensity = clamp(torch.get('current_intensity', TORCH_BASE_INTENSITY), 0.5, 1.1)
+		dir_x, dir_y = torch.get('dir', (0, 1))
+		flame_height = max(4, int(cell_h * 0.45))
+		flame_width = max(2, int(cell_w * 0.3))
+		offset_x = int(dir_x * cell_w * 0.18)
+		offset_y = int(dir_y * cell_h * 0.18)
+		center_x = (cell_w - flame_width) // 2 + offset_x
+		center_y = (cell_h - flame_height) // 2 + offset_y
+		# Draw sconce/stem
+		sconce_height = max(3, flame_height // 3)
+		sconce_y = center_y + flame_height - sconce_height
+		draw_cell_px_rect(cell_x, cell_y, center_x, sconce_y, flame_width, sconce_height, TORCH_SCONCE_COLOR, alpha=0.85)
+		# Outer flame
+		draw_cell_px_rect(cell_x, cell_y, center_x, center_y, flame_width, flame_height, TORCH_FLAME_COLOR, alpha=0.75 * intensity)
+		# Inner ember/glow
+		inner_width = max(1, flame_width - 2)
+		inner_height = max(2, flame_height - 3)
+		draw_cell_px_rect(cell_x, cell_y, center_x + (flame_width - inner_width) / 2, center_y + 1, inner_width, inner_height, TORCH_EMBER_COLOR, alpha=0.65 * intensity)
+
 	# Simple wall-normal helper for directional lighting on walls
 	def wall_normal(d: Dungeon, x: int, y: int):
 		if not d.is_wall(x, y):
@@ -2060,7 +2682,7 @@ def run_pygame():
 			return nx / length, ny / length
 		return 0.0, 0.0
 
-	def draw_minimap(surface: pygame.Surface, dungeon: Dungeon, explored_set: set, visible_set: set, px: int, py: int) -> None:
+	def draw_minimap(surface: pygame.Surface, dungeon: Dungeon, explored_set: set, visible_set: set, px: int, py: int, win_w: int, win_h: int) -> None:
 		"""Draw minimap with fog-of-war and current visibility.
 		
 		Args:
@@ -2070,6 +2692,8 @@ def run_pygame():
 			visible_set (set): Set of currently visible tiles
 			px (int): Player X coordinate
 			py (int): Player Y coordinate
+			win_w (int): Window width in pixels
+			win_h (int): Window height in pixels
 		"""
 		mm = SETTINGS.get('minimap', {}) or {}
 		if not mm.get('enabled', True):
@@ -2077,9 +2701,23 @@ def run_pygame():
 		t = int(mm.get('tile', 4))
 		margin = int(mm.get('margin', 8))
 		pos = (mm.get('position', 'top-right') or 'top-right').lower()
+		
+		# Calculate minimap size with automatic scaling for large dungeons
+		max_minimap_width = win_w // 4  # Max 25% of screen width
+		max_minimap_height = win_h // 3  # Max 33% of screen height
+		
 		w_px = dungeon.w * t
 		h_px = dungeon.h * t
-
+		
+		# Scale down if minimap is too large
+		if w_px > max_minimap_width or h_px > max_minimap_height:
+			scale_w = max_minimap_width / w_px if w_px > max_minimap_width else 1.0
+			scale_h = max_minimap_height / h_px if h_px > max_minimap_height else 1.0
+			scale = min(scale_w, scale_h)
+			t = max(1, int(t * scale))
+			w_px = dungeon.w * t
+			h_px = dungeon.h * t
+		
 		# Determine anchor position
 		if pos == 'top-left':
 			ox, oy = margin, margin
@@ -2173,11 +2811,59 @@ def run_pygame():
 					c_target = mini_color(x, y, (x, y) in visible_set, alpha)
 					c = lerp(PARCHMENT_BG, c_target, alpha)
 					surface.fill(c, rect)
-				else:
-					# unseen stays black (implicit)
-					pass
+		else:
+			# unseen stays black (implicit)
+			pass
 
-		# Player marker (bright green)
+		# === Gold glow for fully searched areas (outermost perimeter only) ===
+		# Light gold color (255, 215, 0) with transparency
+		gold_color = (255, 215, 0)
+		
+		# Find all tiles that are fully searched (illumination >= 1.0)
+		# Draw glow on ANY tile (wall or floor) that borders an unsearched area
+		for y in range(dungeon.h):
+			for x in range(dungeon.w):
+				if tile_illumination_source.get((x, y)) == 'player' and tile_illumination_alpha.get((x, y), 0.0) >= 1.0:
+					# Check which sides of this tile face unsearched areas
+					# Draw glow lines only on those outer edges
+					px = ox + x * t
+					py = oy + y * t
+					
+					glow_surf = pygame.Surface((t, t), pygame.SRCALPHA)
+					
+					# Check each cardinal direction
+					# Top
+					if (x, y-1) not in tile_illumination_alpha or tile_illumination_alpha.get((x, y-1), 0.0) < 1.0:
+						for i in range(2):
+							alpha = 100 - (i * 35)  # 100, 65
+							glow_color_alpha = (*gold_color, alpha)
+							offset = i
+							pygame.draw.line(glow_surf, glow_color_alpha, (0, offset), (t, offset), 1)
+					# Bottom
+					if (x, y+1) not in tile_illumination_alpha or tile_illumination_alpha.get((x, y+1), 0.0) < 1.0:
+						for i in range(2):
+							alpha = 100 - (i * 35)
+							glow_color_alpha = (*gold_color, alpha)
+							offset = i
+							pygame.draw.line(glow_surf, glow_color_alpha, (0, t-1-offset), (t, t-1-offset), 1)
+					# Left
+					if (x-1, y) not in tile_illumination_alpha or tile_illumination_alpha.get((x-1, y), 0.0) < 1.0:
+						for i in range(2):
+							alpha = 100 - (i * 35)
+							glow_color_alpha = (*gold_color, alpha)
+							offset = i
+							pygame.draw.line(glow_surf, glow_color_alpha, (offset, 0), (offset, t), 1)
+					# Right
+					if (x+1, y) not in tile_illumination_alpha or tile_illumination_alpha.get((x+1, y), 0.0) < 1.0:
+						for i in range(2):
+							alpha = 100 - (i * 35)
+							glow_color_alpha = (*gold_color, alpha)
+							offset = i
+							pygame.draw.line(glow_surf, glow_color_alpha, (t-1-offset, 0), (t-1-offset, t), 1)
+					
+					surface.blit(glow_surf, (px, py))
+
+		# Player marker (bright green) - draw last so it's on top
 		pr = (ox + px * t, oy + py * t, t, t)
 		surface.fill(PLAYER_GREEN, pr)
 
@@ -2294,8 +2980,9 @@ def run_pygame():
 			draw_char_at(cell_x + i, cell_y, ch, color, use_ui_font=use_ui_font, use_title_font=use_title_font, bold=bold)
 
 	# Session state: multi-level support
-	levels = []  # list of dicts: dungeon/explored/player + touched/totals for bricks, walls, floors
-	current_level_index = 0
+	if not using_loaded_save:
+		levels = []  # list of dicts: dungeon/explored/player + touched/totals for bricks, walls, floors
+		current_level_index = 0
 
 	def snapshot_current():
 		return {
@@ -2309,6 +2996,7 @@ def run_pygame():
 			'floors_stepped': set(floors_stepped),
 			'total_walls': int(total_walls),
 			'total_floors': int(total_floors),
+			'torches': serialize_torches(torches),
 		}
 
 	def collect_levels_for_save(level_list):
@@ -2346,6 +3034,7 @@ def run_pygame():
 				'floors_stepped': list(sorted(fs)),
 				'total_walls': int(tw),
 				'total_floors': int(tf),
+				'torches': serialize_torches(deserialize_torches(lvl.get('torches', []))),
 			})
 		return out
 
@@ -2359,6 +3048,7 @@ def run_pygame():
 		nonlocal dungeon, fov, explored, px, py, current_level_index
 		nonlocal mm_reveal, mm_noise, wr_reveal, wr_noise
 		nonlocal bricks_touched, total_bricks, walls_touched, floors_touched, floors_stepped, total_walls, total_floors
+		nonlocal torches, torch_lookup
 		# Save snapshot of current first
 		if levels:
 			levels[current_level_index] = snapshot_current()
@@ -2411,6 +3101,8 @@ def run_pygame():
 		rf = compute_reachable_floors(dungeon, px, py)
 		total_floors = len(rf)
 		total_walls = count_total_exposed_walls(dungeon, rf)
+		torches = generate_wall_torches(dungeon)
+		torch_lookup = rebuild_torch_lookup(torches)
 		levels.append({
 			'dungeon': dungeon,
 			'explored': explored,
@@ -2422,37 +3114,42 @@ def run_pygame():
 			'floors_stepped': floors_stepped,
 			'total_walls': total_walls,
 			'total_floors': total_floors,
+			'torches': serialize_torches(torches),
 		})
 		# rebuild minimap/world buffers for new level
 		mm_reveal, mm_noise = build_minimap_buffers(dungeon)
 		wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
 		current_level_index = len(levels) - 1
+		levels[current_level_index]['torches'] = serialize_torches(torches)
 		add_message("New level created.")
 
-	# Initialize with first level
-	px, py = (dungeon.rooms[0].center() if dungeon.rooms else (1, 1))
-	levels.append({
-		'dungeon': dungeon,
-		'explored': explored,
-		'player': (px, py),
-		'bricks_touched': bricks_touched,
-		'total_bricks': total_bricks,
-		'walls_touched': walls_touched,
-		'floors_touched': floors_touched,
-		'floors_stepped': floors_stepped,
-		'total_walls': total_walls,
-		'total_floors': total_floors,
-	})
-	# build minimap buffers for initial level
-	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
-	# build world FoW buffers for initial level
-	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
-	current_level_index = 0
+	# Initialize with first level for new games
+	if not levels:
+		px, py = (dungeon.rooms[0].center() if dungeon.rooms else (1, 1))
+		levels.append({
+			'dungeon': dungeon,
+			'explored': explored,
+			'player': (px, py),
+			'bricks_touched': bricks_touched,
+			'total_bricks': total_bricks,
+			'walls_touched': walls_touched,
+			'floors_touched': floors_touched,
+			'floors_stepped': floors_stepped,
+			'total_walls': total_walls,
+			'total_floors': total_floors,
+			'torches': serialize_torches(torches),
+		})
+		current_level_index = 0
 
-	# Mark starting tile as stepped if it's a floor
-	if 0 <= px < dungeon.w and 0 <= py < dungeon.h and dungeon.tiles[px][py] == TILE_FLOOR:
+	# build minimap and world FoW buffers for current level
+	mm_reveal, mm_noise = build_minimap_buffers(dungeon)
+	wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
+
+	# Mark starting tile as stepped if it's a floor (new games only)
+	if not using_loaded_save and 0 <= px < dungeon.w and 0 <= py < dungeon.h and dungeon.tiles[px][py] == TILE_FLOOR:
 		floors_stepped.add((px, py))
 		levels[current_level_index]['floors_stepped'] = floors_stepped
+	levels[current_level_index]['torches'] = serialize_torches(torches)
 
 	# Welcome message with character name
 	if player_character:
@@ -2461,19 +3158,19 @@ def run_pygame():
 	else:
 		add_message("Welcome to the dungeon.")
 
-	# Initialize ambient dungeon sounds (but don't start yet)
+	# Initialize water drip sound effect controller (but don't start yet)
+	sound_generator = None
 	try:
-		from sounds import get_sound_generator, get_ambience_player
 		sound_generator = get_sound_generator()
-		ambience_player = get_ambience_player()
-		ambience_started = False  # Will start after fade-in completes
+		drip_sfx = get_water_drip_sfx()
+		if drip_sfx:
+			drip_sfx.set_master_volume(0.5)
+			drip_sfx.set_interval_range(9000, 18000)
+		drip_started = drip_sfx.active
 	except Exception as e:
-		print(f"Could not load ambient sounds: {e}")
-		ambience_player = None
-		ambience_started = False
-
-	# Initialize dungeon music (but don't start yet)
-	music_started = False  # Will start after fade-in completes
+		print(f"Could not load water-drip sounds: {e}")
+		drip_sfx = None
+		drip_started = False
 
 	# Dungeon fade-in effect
 	dungeon_fade_alpha = 0.0  # Start fully transparent
@@ -2574,11 +3271,29 @@ def run_pygame():
 			options = ["Character Creator", "Settings", "Save", "Load", "Quit"]
 			draw_opts(options, menu_index, 8)  # Moved down from 6 to 8
 		elif menu_mode == 'settings':
+			# Volume sliders
+			music_vol = int(SETTINGS.get('music_volume', 0.7) * 100)
+			sound_vol = int(SETTINGS.get('sound_volume', 0.8) * 100)
+			
+			# Toggle settings
 			hud = "On" if SETTINGS.get('hud_text', True) else "Off"
 			mm = SETTINGS.get('minimap', {})
 			mme = "On" if (mm.get('enabled', True)) else "Off"
-			options = [f"HUD: {hud}", f"Minimap: {mme}", "Back"]
-			draw_opts(options, menu_index, 8)  # Moved down from 6 to 8
+			glow = "On" if SETTINGS.get('show_gold_glow', True) else "Off"
+			render = SETTINGS.get('render_mode', 'blocks').capitalize()
+			auto_search = "On" if SETTINGS.get('auto_search', False) else "Off"
+			
+			options = [
+				f"Music Volume: {music_vol}%",
+				f"Sound Volume: {sound_vol}%",
+				f"HUD Text: {hud}",
+				f"Minimap: {mme}",
+				f"Gold Glow: {glow}",
+				f"Render Mode: {render}",
+				f"Auto Search: {auto_search}",
+				"Back"
+			]
+			draw_opts(options, menu_index, 8)
 		elif menu_mode == 'save':
 			prompt = "Name thy hero and press Enter:"
 			draw_text_line(x0 + 3, y0 + 8, prompt, text_col, box_w - 6)  # Moved down from 6 to 8
@@ -2650,10 +3365,10 @@ def run_pygame():
 		
 		# Initialize equipment (paperdoll) if not present
 		if not hasattr(player_character, 'equipped'):
-			player_character.equipped = CharacterEquipment()
+			setattr(player_character, 'equipped', CharacterEquipment())
 		
-		inv = player_character.inventory
-		equipped = player_character.equipped
+		inv = getattr(player_character, 'inventory', CharacterInventory())
+		equipped = getattr(player_character, 'equipped', CharacterEquipment())
 		
 		# Colors - Match main UI palette
 		frame_col = MARBLE_WHITE
@@ -3008,7 +3723,7 @@ def run_pygame():
 						menu_index = 0
 						save_name = ""
 						load_names = list_saves()
-						load_index = 0
+						load_index = default_load_index(load_names)
 					continue
 				
 				# Inventory screen toggle
@@ -3260,6 +3975,14 @@ def run_pygame():
 							if menu_index == 0:  # Character Creator
 								# Launch character creator GUI
 								menu_open = False
+								was_drip_active = False
+								previous_drip_volume = 0.5
+								if drip_sfx:
+									was_drip_active = bool(drip_sfx.active)
+									previous_drip_volume = getattr(drip_sfx, 'master_volume', 0.5)
+									if was_drip_active:
+										drip_sfx.stop()
+										drip_started = False
 								try:
 									from char_gui import run_character_creator
 									created_char = run_character_creator()
@@ -3274,6 +3997,11 @@ def run_pygame():
 									add_message(f"Error in Character Creator: {e}")
 									import traceback
 									traceback.print_exc()
+								finally:
+									if drip_sfx and was_drip_active:
+										drip_sfx.set_master_volume(previous_drip_volume)
+										drip_sfx.start()
+										drip_started = True
 							elif menu_index == 1:  # Settings
 								menu_mode = 'settings'
 								menu_index = 0
@@ -3283,22 +4011,47 @@ def run_pygame():
 							elif menu_index == 3:  # Load
 								menu_mode = 'load'
 								load_names = list_saves()
-								load_index = 0
+								load_index = default_load_index(load_names)
 							elif menu_index == 4:  # Quit
 								running = False
 					elif menu_mode == 'settings':
 						if event.key in (pygame.K_w, pygame.K_UP):
-							menu_index = (menu_index - 1) % 3
+							menu_index = (menu_index - 1) % 8
 						elif event.key in (pygame.K_s, pygame.K_DOWN):
-							menu_index = (menu_index + 1) % 3
+							menu_index = (menu_index + 1) % 8
+						# Left/Right for volume sliders
+						elif event.key in (pygame.K_a, pygame.K_LEFT):
+							if menu_index == 0:  # Music volume
+								vol = max(0.0, SETTINGS.get('music_volume', 0.7) - 0.05)
+								SETTINGS['music_volume'] = vol
+								pygame.mixer.music.set_volume(vol)
+							elif menu_index == 1:  # Sound volume
+								vol = max(0.0, SETTINGS.get('sound_volume', 0.8) - 0.05)
+								SETTINGS['sound_volume'] = vol
+						elif event.key in (pygame.K_d, pygame.K_RIGHT):
+							if menu_index == 0:  # Music volume
+								vol = min(1.0, SETTINGS.get('music_volume', 0.7) + 0.05)
+								SETTINGS['music_volume'] = vol
+								pygame.mixer.music.set_volume(vol)
+							elif menu_index == 1:  # Sound volume
+								vol = min(1.0, SETTINGS.get('sound_volume', 0.8) + 0.05)
+								SETTINGS['sound_volume'] = vol
 						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-							if menu_index == 0:  # toggle HUD
+							if menu_index == 2:  # toggle HUD
 								SETTINGS['hud_text'] = not SETTINGS.get('hud_text', True)
-							elif menu_index == 1:  # toggle minimap
+							elif menu_index == 3:  # toggle minimap
 								mm = SETTINGS.get('minimap', {})
 								mm['enabled'] = not mm.get('enabled', True)
 								SETTINGS['minimap'] = mm
-							else:
+							elif menu_index == 4:  # toggle gold glow
+								SETTINGS['show_gold_glow'] = not SETTINGS.get('show_gold_glow', True)
+							elif menu_index == 5:  # cycle render mode
+								current = SETTINGS.get('render_mode', 'blocks')
+								SETTINGS['render_mode'] = 'ascii' if current == 'blocks' else 'blocks'
+								render_mode = SETTINGS['render_mode']
+							elif menu_index == 6:  # toggle auto search
+								SETTINGS['auto_search'] = not SETTINGS.get('auto_search', False)
+							elif menu_index == 7:  # Back
 								menu_mode = 'main'
 						# no player movement when menu open
 						continue
@@ -3333,55 +4086,33 @@ def run_pygame():
 						elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
 							nm = load_names[load_index]
 							try:
-								d2, exp2, px2, py2, levels_data, idx = load_session(nm)
-								# rebuild in-memory levels from save
-								new_levels = []
-								for lvl in levels_data:
-									dl = decode_tiles(lvl['tiles'])
-									dl = decode_materials(dl, lvl.get('materials', []))
-									expl = set(tuple(e) for e in lvl.get('explored', []))
-									pl = tuple(lvl.get('player', [1, 1]))
-									# Restore metrics if present
-									bt_list = [tuple(pt) for pt in lvl.get('bricks_touched', [])]
-									tb_val = int(lvl.get('total_bricks', count_total_bricks(dl)))
-									wt_list = [tuple(pt) for pt in lvl.get('walls_touched', [])]
-									ft_list = [tuple(pt) for pt in lvl.get('floors_touched', [])]
-									fs_list = [tuple(pt) for pt in lvl.get('floors_stepped', [])]
-									tw_val = int(lvl.get('total_walls', count_total_walls(dl)))
-									tf_val = int(lvl.get('total_floors', count_total_floors(dl)))
-									new_levels.append({
-										'dungeon': dl,
-										'explored': expl,
-										'player': (int(pl[0]), int(pl[1])),
-										'bricks_touched': set(bt_list),
-										'total_bricks': tb_val,
-										'walls_touched': set(wt_list),
-										'floors_touched': set(ft_list),
-										'floors_stepped': set(fs_list),
-										'total_walls': tw_val,
-										'total_floors': tf_val,
-									})
-								if not new_levels:
-									raise ValueError('Empty save')
-								levels = new_levels
-								current_level_index = int(idx)
-								# switch to current level
-								dungeon = levels[current_level_index]['dungeon']
-								explored = levels[current_level_index]['explored']
-								px, py = levels[current_level_index]['player']
-								bricks_touched = levels[current_level_index].get('bricks_touched', set())
-								total_bricks = levels[current_level_index].get('total_bricks', count_total_bricks(dungeon))
-								# Restore combined metrics
-								walls_touched = levels[current_level_index].get('walls_touched', set())
-								floors_touched = levels[current_level_index].get('floors_touched', set())
-								floors_stepped = levels[current_level_index].get('floors_stepped', set())
-								total_walls = levels[current_level_index].get('total_walls', count_total_walls(dungeon))
-								total_floors = levels[current_level_index].get('total_floors', count_total_floors(dungeon))
+								_, _, _, _, levels_data, idx = load_session(nm)
+								(
+									levels,
+									current_level_index,
+									dungeon,
+									explored,
+									px,
+									py,
+									bricks_touched,
+									total_bricks,
+									walls_touched,
+									floors_touched,
+									floors_stepped,
+									total_walls,
+									total_floors,
+									torches,
+								) = hydrate_levels_from_save(levels_data, idx)
+								torch_lookup = rebuild_torch_lookup(torches)
+								if levels and 0 <= current_level_index < len(levels):
+									levels[current_level_index]['torches'] = serialize_torches(torches)
 								fov = FOV(dungeon)
 								# rebuild minimap/world buffers for loaded level
 								mm_reveal, mm_noise = build_minimap_buffers(dungeon)
 								wr_reveal, wr_noise = build_world_reveal_buffers(dungeon)
+								using_loaded_save = True
 								menu_mode = 'main'
+								set_last_character_name(nm)
 								add_message(f"Loaded save '{nm}'.")
 							except Exception as e:
 								# simple error display in title line
@@ -3411,10 +4142,52 @@ def run_pygame():
 										levels[current_level_index]['floors_stepped'] = floors_stepped
 
 		# Update visibility after input
+		player_visible: set[tuple[int, int]]
+		torch_lit_tiles: set[tuple[int, int]]
 		if debug_show_all_visible:
 			visible = {(x, y) for x in range(dungeon.w) for y in range(dungeon.h)}
+			los_visible = set(visible)
+			player_visible = set(visible)
+			torch_lit_tiles = set()
 		else:
-			visible = fov.compute(px, py, max(1, int(light_radius - 0.5)))  # Slightly smaller visibility radius
+			base_radius = max(1, int(light_radius - 0.5))
+			extra_reach = 0.0
+			if torches:
+				for torch in torches:
+					tx, ty = torch['x'], torch['y']
+					dist = math.hypot(tx - px, ty - py)
+					torch_radius = torch.get('radius', TORCH_LIGHT_RADIUS)
+					extra_reach = max(extra_reach, dist + torch_radius)
+			extended_radius = max(base_radius, int(math.ceil(extra_reach)))
+			los_visible = fov.compute(px, py, extended_radius)
+			visible = set()
+			player_visible = set()
+			torch_lit_tiles = set()
+			base_radius_sq = base_radius * base_radius
+			for (vx, vy) in los_visible:
+				dx = vx - px
+				dy = vy - py
+				if dx * dx + dy * dy <= base_radius_sq:
+					visible.add((vx, vy))
+					player_visible.add((vx, vy))
+			for torch in torches:
+				tx, ty = torch['x'], torch['y']
+				if (tx, ty) not in los_visible:
+					continue
+				torch_radius = torch.get('radius', TORCH_LIGHT_RADIUS)
+				torch_radius_sq = torch_radius * torch_radius
+				reach = int(math.ceil(torch_radius))
+				for dy in range(-reach, reach + 1):
+					for dx in range(-reach, reach + 1):
+						x = tx + dx
+						y = ty + dy
+						if not (0 <= x < dungeon.w and 0 <= y < dungeon.h):
+							continue
+						if dx * dx + dy * dy > torch_radius_sq + 1e-6:
+							continue
+						if (x, y) in los_visible:
+							visible.add((x, y))
+							torch_lit_tiles.add((x, y))
 
 		# Animate minimap reveal
 		dt = clock.get_time() / 1000.0
@@ -3432,57 +4205,38 @@ def run_pygame():
 			dungeon_fade_alpha = min(1.0, dungeon_fade_alpha + dt / dungeon_fade_duration)
 			if dungeon_fade_alpha >= 1.0:
 				dungeon_fade_complete = True
-				# Start ambient sounds after fade completes
-				if ambience_player and not ambience_started:
-					print("[AUDIO] Starting ambient sounds...")
-					ambience_player.start()
-					ambience_started = True
-					add_message("Ambient sounds activated.")
-					print(f"[AUDIO] Ambience active: {ambience_player.active}")
-				
-				# Start dungeon music after fade completes
-				if not music_started:
-					try:
-						import tempfile
-						music_player = get_music_player()
-						songs_path = os.path.join(os.path.dirname(__file__), "songs.json")
-						
-						# Load songs.json and extract dungeon_depths
-						with open(songs_path, 'r') as f:
-							songs = json.load(f)
-						
-						# Create temporary file with just the dungeon_depths song
-						temp_song = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-						json.dump(songs["dungeon_depths"], temp_song)
-						temp_song.close()
-						
-						print("[AUDIO] Starting dungeon music (dungeon_depths)...")
-						music_player.play_song(temp_song.name, loops=-1, fade_ms=3000)
-						
-						# Clean up temp file
-						os.unlink(temp_song.name)
-						
-						music_started = True
-						add_message("Dungeon music started.")
-					except Exception as e:
-						print(f"[AUDIO] Could not start dungeon music: {e}")
-						music_started = True  # Don't keep retrying
+				# Ensure water-drip SFX scheduling resumes after fade completes
+				if drip_sfx:
+					drip_sfx.set_master_volume(0.5)
+					if not drip_sfx.active:
+						print("[AUDIO] Starting water-drip SFX...")
+						drip_sfx.start()
+						add_message("Water drips echo through the halls.")
+						print(f"[AUDIO] Water-drip active: {drip_sfx.active}")
+			drip_started = bool(drip_sfx and drip_sfx.active)
 
-		# Update ambient sounds (only if started)
-		if ambience_player and ambience_started:
-			ambience_player.update(pygame.time.get_ticks())
+		# Update water-drip scheduling
+		if drip_sfx:
+			drip_sfx.update(pygame.time.get_ticks())
 
 		# Update secret searching and gradual illumination for tiles in light radius
 		if player_character and dungeon_fade_complete:
 			# Calculate perception modifier from wisdom (D&D style: (score - 10) / 2)
 			wisdom_mod = (player_character.wisdom - 10) // 2
-			# Base search time is 3 seconds, reduced by perception modifier
+			# Base search time is 2 seconds, reduced by perception modifier
 			# Each +1 wisdom mod reduces search time by 0.2 seconds (min 1 second)
-			base_search_time = 3.0
+			base_search_time = 2.0
 			search_time_required = max(1.0, base_search_time - (wisdom_mod * 0.2))
+
+			# Torch-lit tiles stay fully illuminated regardless of player proximity
+			for (tx, ty) in torch_lit_tiles:
+				if tile_illumination_source.get((tx, ty)) != 'player':
+					tile_illumination_source[(tx, ty)] = 'torch'
+					tile_illumination_alpha[(tx, ty)] = max(tile_illumination_alpha.get((tx, ty), 0.0), 1.0)
+					tile_illumination_progress[(tx, ty)] = max(tile_illumination_progress.get((tx, ty), 0.0), search_time_required)
 			
 			# Check all tiles in light radius
-			for (vx, vy) in visible:
+			for (vx, vy) in player_visible:
 				# Update gradual illumination for ALL visible tiles
 				if (vx, vy) not in tile_illumination_alpha:
 					tile_illumination_alpha[(vx, vy)] = 0.0
@@ -3494,13 +4248,14 @@ def run_pygame():
 					# Calculate illumination alpha based on time (same as search time)
 					progress_ratio = min(1.0, tile_illumination_progress[(vx, vy)] / search_time_required)
 					tile_illumination_alpha[(vx, vy)] = progress_ratio
+				tile_illumination_source[(vx, vy)] = 'player'
 				# Update visual fade-in for all visible tiles with secrets (even revealed ones)
 				if (vx, vy) in tile_secrets:
 					if (vx, vy) not in tile_search_alpha:
 						tile_search_alpha[(vx, vy)] = 0.0
 					
-					# Only accumulate search progress for unrevealed secrets
-					if (vx, vy) not in revealed_secrets:
+					# Only accumulate search progress for secrets that haven't been checked yet
+					if (vx, vy) not in revealed_secrets and (vx, vy) not in tile_secrets_checked:
 						# Accumulate search time
 						if (vx, vy) not in tile_search_progress:
 							tile_search_progress[(vx, vy)] = 0.0
@@ -3511,12 +4266,15 @@ def run_pygame():
 						progress_ratio = min(1.0, tile_search_progress[(vx, vy)] / search_time_required)
 						tile_search_alpha[(vx, vy)] = progress_ratio
 						
-						# Check if tile is fully searched
+						# Check if tile is fully searched (only roll once)
 						if tile_search_progress[(vx, vy)] >= search_time_required:
+							# Mark this secret as checked (one roll only)
+							tile_secrets_checked.add((vx, vy))
+							
 							# Get difficulty DC for this secret
 							secret_dc = tile_secrets[(vx, vy)]
 							
-							# Roll perception check: d20 + wisdom modifier vs secret DC
+							# Roll perception check: d20 + wisdom modifier vs secret DC (ONE TIME ONLY)
 							perception_roll = random.randint(1, 20) + wisdom_mod
 							
 							if perception_roll >= secret_dc:
@@ -3540,8 +4298,8 @@ def run_pygame():
 									except Exception as e:
 										print(f"[SECRETS] Could not play coin sound: {e}")
 							else:
-								# Failed perception check, but tile is fully searched
-								print(f"[SECRETS] Searched ({vx}, {vy}) but didn't find secret - Roll: {perception_roll}, DC: {secret_dc}")
+								# Failed perception check - secret remains hidden permanently
+								print(f"[SECRETS] Searched ({vx}, {vy}) but didn't find secret - Roll: {perception_roll}, DC: {secret_dc} (ONE TIME CHECK - FAILED)")
 								# Keep visual alpha at maximum to show it was searched
 								tile_search_alpha[(vx, vy)] = 1.0
 
@@ -3590,6 +4348,10 @@ def run_pygame():
 			for sy in range(view_h):
 				draw_char_at(BORDER_COL, sy, WALL_CH, scale_color(WALL_LIGHT, 0.9))
 
+		ticks = pygame.time.get_ticks()
+		light_sources = prepare_light_sources(px, py, light_radius, torches, ticks)
+		torch_only_sources = [src for src in light_sources if src.get('is_torch')]
+
 		# Draw tiles in viewport window
 		for sy in range(view_h):
 			wy = cam_y + sy
@@ -3606,21 +4368,17 @@ def run_pygame():
 					world_pos = (wx, wy)
 					
 					if world_pos in visible:
-						explored.add(world_pos)
-						# Calculate distance from player for lighting
-						dx = wx - px
-						dy = wy - py
-						d = math.sqrt(dx * dx + dy * dy)
-						
-						# Stronger falloff: quadratic for more dramatic lighting
-						if d <= 1.0:
-							# Immediate vicinity gets full brightness
-							tval = 1.0
-						else:
-							# Quadratic falloff for distance > 1
-							normalized_distance = d / light_radius
-							tval = max(0.1, 1.0 - (normalized_distance * normalized_distance))  # Minimum brightness of 0.1
-						
+						visible_by_player = world_pos in player_visible
+						if visible_by_player:
+							if world_pos not in explored:
+								explored.add(world_pos)
+							if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h:
+								if mm_reveal and mm_reveal[wx][wy] < 1.0:
+									mm_reveal[wx][wy] = 1.0
+								if wr_reveal and wr_reveal[wx][wy] < 1.0:
+									wr_reveal[wx][wy] = 1.0
+						light_value, primary_source = evaluate_light_sources(light_sources, wx, wy)
+						tval = max(0.1, min(light_value, 1.0))
 						# Get material-specific character and color
 						is_wall = (tile == TILE_WALL)
 						is_door = (tile == TILE_DOOR)
@@ -3646,6 +4404,24 @@ def run_pygame():
 						
 						# Apply lighting to the material color
 						color = scale_color(base_color, tval)
+						torch_here = torch_lookup.get(world_pos)
+						if torch_only_sources:
+							torch_light, _ = evaluate_light_sources(torch_only_sources, wx, wy)
+							if torch_light > 0.0:
+								warmth = min(60, int(80 * torch_light))
+								color = (
+									min(255, color[0] + warmth),
+									min(255, color[1] + warmth // 2),
+									color[2]
+								)
+						if torch_here and render_mode != 'blocks':
+							flame_scale = clamp(torch_here.get('current_intensity', TORCH_BASE_INTENSITY), 0.6, 1.0)
+							draw_ch = '†'
+							color = (
+								min(255, int(TORCH_FLAME_COLOR[0] * flame_scale)),
+								min(255, int(TORCH_FLAME_COLOR[1] * flame_scale)),
+								min(255, int(TORCH_FLAME_COLOR[2] * flame_scale)),
+							)
 						
 						# Apply gradual illumination - tiles start dim and brighten over time
 						if (wx, wy) in tile_illumination_alpha:
@@ -3675,9 +4451,9 @@ def run_pygame():
 						# Enhanced directional boost for walls: stronger effect
 						if tile == TILE_WALL:
 							wnx, wny = wall_normal(dungeon, wx, wy)
-							# Light vector from tile to player (toward the light source)
-							lx = px - wx
-							ly = py - wy
+							light_origin = primary_source if primary_source else (px, py)
+							lx = light_origin[0] - wx
+							ly = light_origin[1] - wy
 							llen = math.hypot(lx, ly)
 							if llen > 1e-6:
 								lx /= llen
@@ -3689,23 +4465,24 @@ def run_pygame():
 								boost = 0.5 * ndotl * tval  # Scale by distance too
 								color = scale_color(color, 1.0 + boost)
 						
-						# Track exploration metrics when a tile becomes visible
-						# - Brick-specific subset
-						if tile == TILE_WALL and mat == MAT_BRICK:
-							bricks_touched.add((wx, wy))
-						# - Combined wall/floor sets
-						if tile == TILE_WALL:
-							# Only count walls that border a reachable floor tile
-							for dx in (-1,0,1):
-								for dy in (-1,0,1):
-									if dx==0 and dy==0:
-										continue
-									nx, ny = wx+dx, wy+dy
-									if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h and dungeon.tiles[nx][ny] == TILE_FLOOR and (nx, ny) in reachable_this_frame:
-										walls_touched.add((wx, wy))
-										break
-						else:
-							floors_touched.add((wx, wy))
+						# Track exploration metrics only when the player truly reveals the tile
+						if visible_by_player:
+							# - Brick-specific subset
+							if tile == TILE_WALL and mat == MAT_BRICK:
+								bricks_touched.add((wx, wy))
+							# - Combined wall/floor sets
+							if tile == TILE_WALL:
+								# Only count walls that border a reachable floor tile
+								for dx in (-1,0,1):
+									for dy in (-1,0,1):
+										if dx==0 and dy==0:
+											continue
+										nx, ny = wx+dx, wy+dy
+										if 0 <= nx < dungeon.w and 0 <= ny < dungeon.h and dungeon.tiles[nx][ny] == TILE_FLOOR and (nx, ny) in reachable_this_frame:
+											walls_touched.add((wx, wy))
+											break
+							else:
+								floors_touched.add((wx, wy))
 						
 						block_color = color
 					# Explored but not currently visible: dimmed FoW rendering with INVERTED lighting
@@ -3727,6 +4504,10 @@ def run_pygame():
 							# Distant areas get progressively brighter, maxing at edge of light radius
 							normalized_distance = min(d / light_radius, 1.0)
 							fow_brightness = 0.08 + (0.22 * normalized_distance)  # Range: 0.08 to 0.30
+						if torch_only_sources:
+							torch_light_fow, _ = evaluate_light_sources(torch_only_sources, wx, wy)
+							if torch_light_fow > 0.0:
+								fow_brightness = max(fow_brightness, 0.10 + 0.35 * torch_light_fow)
 						
 						# Get material-specific character and color for FOG OF WAR
 						is_wall = (tile == TILE_WALL)
@@ -3759,6 +4540,15 @@ def run_pygame():
 							draw_ch = ' '  # Blank for FoW floors (invisible, blends with parchment)
 							floor_brightness = fow_brightness * 0.5  # Make floors much darker than walls
 							color = scale_color(base_color, floor_brightness)
+							if torch_only_sources:
+								torch_warm, _ = evaluate_light_sources(torch_only_sources, wx, wy)
+								if torch_warm > 0.0:
+									warm_boost = min(45, int(70 * torch_warm))
+									color = (
+										min(255, color[0] + warm_boost),
+										min(255, color[1] + warm_boost // 2),
+										color[2]
+									)
 						
 						# Ensure floors don't render characters
 						if tile == TILE_FLOOR:
@@ -3781,12 +4571,103 @@ def run_pygame():
 						# Use material-specific texture
 						material_texture_name = get_material_texture_name(mat)
 						draw_block_at(cell_x, cell_y, block_color, inset=inset, with_dither=True, material_type=material_texture_name)
+						if torch_lookup and (wx, wy) in torch_lookup:
+							draw_torch_overlay(cell_x, cell_y, torch_lookup[(wx, wy)])
 				else:
 					if draw_ch != ' ':
 						surf = render_glyph(draw_ch, color)
 						gx = off_x + (UI_COLS + 1 + sx) * cell_w + (cell_w - surf.get_width()) // 2
 						gy = off_y + sy * cell_h + (cell_h - surf.get_height()) // 2
 						screen.blit(surf, (gx, gy))
+
+		# === Gold glow for fully searched tiles in main view (outermost perimeter, persists in FoW) ===
+		gold_color = (255, 215, 0)
+		for sy in range(view_h):
+			wy = cam_y + sy
+			for sx in range(view_w):
+				wx = cam_x + sx
+				if 0 <= wx < dungeon.w and 0 <= wy < dungeon.h:
+					# Check if this tile is fully searched and explored (not just visible - persist in FoW)
+					# Draw glow on ANY tile (wall or floor) that borders unsearched area
+					if tile_illumination_source.get((wx, wy)) == 'player' and tile_illumination_alpha.get((wx, wy), 0.0) >= 1.0 and (wx, wy) in explored:
+						# Draw gold glow on outer edges only
+						cell_x = UI_COLS + 1 + sx
+						cell_y = sy
+						
+						if render_mode == 'blocks':
+							# Block mode: draw glow lines on outer edges
+							glow_surf = pygame.Surface((cell_w, cell_h), pygame.SRCALPHA)
+							
+							# Check each cardinal direction for unsearched neighbors
+							# Top
+							if (wx, wy-1) not in tile_illumination_alpha or tile_illumination_alpha.get((wx, wy-1), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i * 2
+									pygame.draw.line(glow_surf, glow_color_alpha, (0, offset), (cell_w, offset), 2)
+							# Bottom
+							if (wx, wy+1) not in tile_illumination_alpha or tile_illumination_alpha.get((wx, wy+1), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i * 2
+									pygame.draw.line(glow_surf, glow_color_alpha, (0, cell_h-1-offset), (cell_w, cell_h-1-offset), 2)
+							# Left
+							if (wx-1, wy) not in tile_illumination_alpha or tile_illumination_alpha.get((wx-1, wy), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i * 2
+									pygame.draw.line(glow_surf, glow_color_alpha, (offset, 0), (offset, cell_h), 2)
+							# Right
+							if (wx+1, wy) not in tile_illumination_alpha or tile_illumination_alpha.get((wx+1, wy), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i * 2
+									pygame.draw.line(glow_surf, glow_color_alpha, (cell_w-1-offset, 0), (cell_w-1-offset, cell_h), 2)
+							
+							gx = off_x + cell_x * cell_w
+							gy = off_y + cell_y * cell_h
+							screen.blit(glow_surf, (gx, gy))
+						else:
+							# ASCII mode: draw glow lines on outer edges
+							glow_surf = pygame.Surface((cell_w, cell_h), pygame.SRCALPHA)
+							
+							# Check each cardinal direction for unsearched neighbors
+							# Top
+							if (wx, wy-1) not in tile_illumination_alpha or tile_illumination_alpha.get((wx, wy-1), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i
+									pygame.draw.line(glow_surf, glow_color_alpha, (0, offset), (cell_w, offset), 1)
+							# Bottom
+							if (wx, wy+1) not in tile_illumination_alpha or tile_illumination_alpha.get((wx, wy+1), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i
+									pygame.draw.line(glow_surf, glow_color_alpha, (0, cell_h-1-offset), (cell_w, cell_h-1-offset), 1)
+							# Left
+							if (wx-1, wy) not in tile_illumination_alpha or tile_illumination_alpha.get((wx-1, wy), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i
+									pygame.draw.line(glow_surf, glow_color_alpha, (offset, 0), (offset, cell_h), 1)
+							# Right
+							if (wx+1, wy) not in tile_illumination_alpha or tile_illumination_alpha.get((wx+1, wy), 0.0) < 1.0:
+								for i in range(2):
+									alpha = 100 - (i * 35)
+									glow_color_alpha = (*gold_color, alpha)
+									offset = i
+									pygame.draw.line(glow_surf, glow_color_alpha, (cell_w-1-offset, 0), (cell_w-1-offset, cell_h), 1)
+							
+							gx = off_x + cell_x * cell_w
+							gy = off_y + cell_y * cell_h
+							screen.blit(glow_surf, (gx, gy))
 
 		# Draw player at the center of the viewport
 		pcx = int(clamp(view_w // 2, 0, view_w - 1))
@@ -4003,7 +4884,7 @@ def run_pygame():
 
 		# Minimap (after UI/world)
 		if not menu_open and not inventory_open:
-			draw_minimap(screen, dungeon, explored, visible, px, py)
+			draw_minimap(screen, dungeon, explored, visible, px, py, win_w, win_h)
 
 		# Draw inventory if open
 		if inventory_open:
@@ -4025,8 +4906,8 @@ def run_pygame():
 		frame_count += 1
 
 	# Cleanup when game loop exits
-	if ambience_player:
-		ambience_player.stop()
+	if drip_sfx:
+		drip_sfx.stop()
 
 
 def count_doors(dungeon):
