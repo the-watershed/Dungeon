@@ -55,6 +55,10 @@ def load_settings(path: str) -> dict:
 		# Audio settings
 		"music_volume": 0.7,  # 0.0 to 1.0
 		"sound_volume": 0.8,  # 0.0 to 1.0
+		"ambient_bats": True,
+		"ambient_bat_interval_min": 15000,
+		"ambient_bat_interval_max": 32000,
+		"ambient_bat_volume_scale": 0.6,
 		# Visual settings
 		"show_gold_glow": True,  # Gold glow on fully searched areas
 		"render_mode": "blocks",  # blocks | ascii
@@ -1657,18 +1661,28 @@ def parse_character_inventory(character) -> List[InventoryItem]:
 	return inventory
 
 
-def show_splash_screen():
+def show_splash_screen(screen: Optional["pygame.Surface"] = None, clock: Optional["pygame.time.Clock"] = None) -> bool:
 	"""Display splash screen with DUNGEON title. Press any key to continue."""
 	import pygame
 	from parchment_renderer import ParchmentRenderer
 	import os
-	
-	# Initialize pygame
-	pygame.init()
-	
-	# Window size
-	win_w, win_h = BASE_WIN_W, BASE_WIN_H
-	screen = pygame.display.set_mode((win_w, win_h))
+
+	created_display = False
+
+	if not pygame.get_init():
+		pygame.init()
+
+	if screen is None:
+		win_w, win_h = BASE_WIN_W, BASE_WIN_H
+		screen = pygame.display.set_mode((win_w, win_h))
+		created_display = True
+	else:
+		win_w, win_h = screen.get_size()
+
+	if clock is None:
+		clock = pygame.time.Clock()
+
+	prev_caption = pygame.display.get_caption()
 	pygame.display.set_caption("DUNGEON")
 	
 	# Create dark grey parchment background
@@ -1716,7 +1730,6 @@ def show_splash_screen():
 	
 	
 	# Combined loop: delay, fade in, then wait indefinitely
-	clock = pygame.time.Clock()
 	delay_duration = 3.0  # seconds
 	fade_duration = 3.0  # seconds
 	
@@ -1779,6 +1792,12 @@ def show_splash_screen():
 	
 	# Ambient audio continues into character creator/game without interruption
 	
+		if prev_caption and not created_display:
+			title, icon = prev_caption if len(prev_caption) == 2 else (prev_caption[0], "")
+			pygame.display.set_caption(title, icon)
+		elif created_display:
+			pygame.display.set_caption("")
+
 	return True
 
 
@@ -1888,6 +1907,11 @@ def run_pygame():
 		print("Pygame is required for the windowed mode. Install with: pip install pygame")
 		raise
 
+	try:
+		os.environ['SDL_VIDEO_WINDOW_POS'] = '100,100'
+	except Exception:
+		pass
+
 	# Initialize pygame mixer ONCE at the very beginning
 	# This prevents re-initialization conflicts between music and sound systems
 	pygame.init()
@@ -1901,9 +1925,29 @@ def run_pygame():
 	pygame.mixer.music.set_volume(music_vol)
 	print(f"[AUDIO] Music volume set to {int(music_vol * 100)}%")
 
+	win_w, win_h = BASE_WIN_W, BASE_WIN_H
+	screen = pygame.display.set_mode((win_w, win_h))
+	clock = pygame.time.Clock()
+
+	icon_path = os.path.join(os.path.dirname(__file__), 'resources', 'icons', 'dungeon_icon.bmp')
+	if sys.platform.startswith('win'):
+		try:
+			import ctypes
+			ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('Dungeon.Dungeon')
+		except Exception as appid_error:
+			print(f"[UI] Failed to set AppUserModelID: {appid_error}")
+	if os.path.isfile(icon_path):
+		try:
+			icon_surface = pygame.image.load(icon_path)
+			pygame.display.set_icon(icon_surface)
+		except Exception as icon_error:
+			print(f"[UI] Failed to load window icon from {icon_path}: {icon_error}")
+
 	# Show splash screen first
-	if not show_splash_screen():
+	if not show_splash_screen(screen=screen, clock=clock):
 		return
+
+	pygame.display.set_caption("ASCII Dungeon (Resizable)")
 
 	# Ensure dungeon music plays across character creator and gameplay scenes
 	music_player = None
@@ -1940,7 +1984,7 @@ def run_pygame():
 	if startup_session is None:
 		try:
 			from char_gui import run_character_creator
-			player_character = run_character_creator()
+			player_character = run_character_creator(screen=screen, clock=clock)
 			if not player_character:
 				print("Character creation cancelled. Exiting game.")
 				return
@@ -2007,7 +2051,7 @@ def run_pygame():
 			if player_character is None:
 				try:
 					from char_gui import run_character_creator
-					player_character = run_character_creator()
+					player_character = run_character_creator(screen=screen, clock=clock)
 					if not player_character:
 						print("Character creation cancelled. Exiting game.")
 						return
@@ -2164,18 +2208,6 @@ def run_pygame():
 	debug_noclip = False
 	light_radius = LIGHT_RADIUS   # dynamic light radius for pygame mode
 
-	# Initialize Pygame
-	# Set window position before initialization to make sure window is visible
-	try:
-		os.environ['SDL_VIDEO_WINDOW_POS'] = '100,100'  # Position window away from edges
-	except:
-		pass
-	
-	pygame.init()
-	screen = pygame.display.set_mode((win_w, win_h))
-	pygame.display.set_caption("ASCII Dungeon (Resizable)")
-	clock = pygame.time.Clock()
-
 	# Simple message log for bottom-left feedback
 	message_log: list[dict] = []  # { 't': float, 'text': str }
 	# One-run milestone tracker for exploration announcements
@@ -2305,6 +2337,28 @@ def run_pygame():
 	render_glyph = build_glyph_cache(font)  # type: ignore
 	render_ui_glyph = build_glyph_cache(ui_font)  # type: ignore
 	render_title_glyph = build_glyph_cache(title_font)  # type: ignore
+
+	try:
+		os.makedirs(os.path.dirname(icon_path), exist_ok=True)
+		icon_size = 64
+		icon_surface = pygame.Surface((icon_size, icon_size))
+		icon_surface.fill((0, 0, 0))
+		glyph_surface = title_font.render('D', True, (255, 255, 255))
+		gw, gh = glyph_surface.get_size()
+		if gw == 0 or gh == 0:
+			raise ValueError("Title font produced empty glyph")
+		max_dim = icon_size - 8
+		scale = min(1.0, max_dim / gw, max_dim / gh)
+		if scale < 1.0:
+			new_w = max(1, int(round(gw * scale)))
+			new_h = max(1, int(round(gh * scale)))
+			glyph_surface = pygame.transform.smoothscale(glyph_surface, (new_w, new_h))
+		rect = glyph_surface.get_rect(center=(icon_size // 2, icon_size // 2))
+		icon_surface.blit(glyph_surface, rect)
+		pygame.image.save(icon_surface, icon_path)
+		pygame.display.set_icon(icon_surface.convert())
+	except Exception as icon_error:
+		print(f"[UI] Failed to regenerate window icon: {icon_error}")
 
 	# Prebuild texture patterns for different materials
 	def build_material_texture(w, h, material_type):
@@ -3172,6 +3226,20 @@ def run_pygame():
 		drip_sfx = None
 		drip_started = False
 
+	ambient_bat_enabled = bool(SETTINGS.get('ambient_bats', True))
+	ambient_bat_next_time = 0
+	ambient_bat_interval_min = max(3000, int(SETTINGS.get('ambient_bat_interval_min', 8000)))
+	ambient_bat_interval_max = int(SETTINGS.get('ambient_bat_interval_max', 18000))
+	if ambient_bat_interval_max <= ambient_bat_interval_min:
+		ambient_bat_interval_max = ambient_bat_interval_min + 5000
+	ambient_bat_volume_scale = clamp(float(SETTINGS.get('ambient_bat_volume_scale', 0.6)), 0.0, 1.0)
+	ambient_bat_volume = clamp(float(SETTINGS.get('sound_volume', 0.8)) * ambient_bat_volume_scale, 0.0, 1.0)
+	if sound_generator is None:
+		ambient_bat_enabled = False
+
+	def schedule_next_bat_squeak(now_ms: int) -> int:
+		return now_ms + random.randint(ambient_bat_interval_min, ambient_bat_interval_max)
+
 	# Dungeon fade-in effect
 	dungeon_fade_alpha = 0.0  # Start fully transparent
 	dungeon_fade_duration = 2.0  # Fade in over 2 seconds
@@ -3985,7 +4053,7 @@ def run_pygame():
 										drip_started = False
 								try:
 									from char_gui import run_character_creator
-									created_char = run_character_creator()
+									created_char = run_character_creator(screen=screen, clock=clock)
 									if created_char:
 										# Load character stats into game
 										player_character = created_char
@@ -4215,9 +4283,27 @@ def run_pygame():
 						print(f"[AUDIO] Water-drip active: {drip_sfx.active}")
 			drip_started = bool(drip_sfx and drip_sfx.active)
 
-		# Update water-drip scheduling
+		# Update water-drip scheduling and ambient bat audio
+		current_ticks = pygame.time.get_ticks()
 		if drip_sfx:
-			drip_sfx.update(pygame.time.get_ticks())
+			drip_sfx.update(current_ticks)
+		if ambient_bat_enabled and dungeon_fade_complete and sound_generator:
+			if ambient_bat_next_time == 0:
+				ambient_bat_next_time = schedule_next_bat_squeak(current_ticks)
+			elif current_ticks >= ambient_bat_next_time:
+				try:
+					source_map = getattr(sound_generator, 'sounds', {})
+					if source_map and source_map.get('bat_squeak'):
+						sound_generator.play_random('bat_squeak', ambient_bat_volume)
+					else:
+						bat_sound = sound_generator.generate_bat_squeak_sample()
+						bat_sound.set_volume(ambient_bat_volume)
+						bat_sound.play()
+				except Exception as ambient_err:
+					print(f"[AUDIO] Failed to play bat squeak ambience: {ambient_err}")
+					ambient_bat_enabled = False
+				else:
+					ambient_bat_next_time = schedule_next_bat_squeak(current_ticks)
 
 		# Update secret searching and gradual illumination for tiles in light radius
 		if player_character and dungeon_fade_complete:
@@ -4292,11 +4378,9 @@ def run_pygame():
 								# Play coin sound
 								if sound_generator:
 									try:
-										coin_sound = sound_generator.generate_coin_sound()
-										coin_sound.set_volume(0.6)
-										coin_sound.play()
+										sound_generator.play_secret_discovery_sound(0.6)
 									except Exception as e:
-										print(f"[SECRETS] Could not play coin sound: {e}")
+										print(f"[SECRETS] Could not play secret discovery sound: {e}")
 							else:
 								# Failed perception check - secret remains hidden permanently
 								print(f"[SECRETS] Searched ({vx}, {vy}) but didn't find secret - Roll: {perception_roll}, DC: {secret_dc} (ONE TIME CHECK - FAILED)")

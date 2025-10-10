@@ -24,6 +24,7 @@ Exports:
 """
 from __future__ import annotations
 
+import math
 import random
 from typing import List
 
@@ -115,6 +116,12 @@ MAT_MARBLE = 9   # Marble surface (elegant areas)
 MAT_WOOD = 10    # Wood surface (bridges, floors)
 
 
+# Generation tuning constants
+MIN_LARGE_ROOM_WIDTH = 6
+MIN_LARGE_ROOM_HEIGHT = 4
+MAX_HALLWAY_SEGMENT = 18
+
+
 class Dungeon:
 	"""Main dungeon data structure containing tiles, materials, doors, and rooms.
 	
@@ -150,6 +157,13 @@ class Dungeon:
 		self.rooms: List[Rect] = []
 		self.start_room_index: int = 0  # Index of the start room (always first room)
 		self.throne_room_index: int = -1  # Index of the throne room/exit (always last room)
+		self._rooms_total: int = 0
+		self._rooms_large: int = 0
+		self._max_rooms_planned: int = 0
+		self._enforce_large_rooms: bool = True
+		self._large_width_requirement: int = MIN_LARGE_ROOM_WIDTH
+		self._large_height_requirement: int = MIN_LARGE_ROOM_HEIGHT
+		self._max_hallway_segment: int = MAX_HALLWAY_SEGMENT
 
 	def carve_room(self, room: Rect) -> None:
 		"""Carve out a rectangular room in the dungeon.
@@ -177,6 +191,95 @@ class Dungeon:
 			if 0 <= x < self.w and 0 <= y < self.h:
 				self.tiles[x][y] = TILE_FLOOR
 				self.materials[x][y] = MAT_COBBLE
+
+	def _is_large_room(self, room: Rect) -> bool:
+		width = room.x2 - room.x1
+		height = room.y2 - room.y1
+		return width >= self._large_width_requirement and height >= self._large_height_requirement
+
+	def _register_room(self, room: Rect) -> None:
+		self.rooms.append(room)
+		self._rooms_total += 1
+		if self._is_large_room(room):
+			self._rooms_large += 1
+
+	def _should_force_large_room(self) -> bool:
+		if not self._enforce_large_rooms:
+			return False
+		target = math.ceil((self._rooms_total + 1) / 2)
+		return self._rooms_large < target
+
+	def _pick_room_size(self, room_min: int, room_max: int, force_large: bool = False) -> tuple[int, int]:
+		force_large = force_large or self._should_force_large_room()
+		if not self._enforce_large_rooms:
+			force_large = False
+		for _ in range(48):
+			w = random.randint(room_min, room_max)
+			h = random.randint(room_min, room_max)
+			if not force_large or (w >= self._large_width_requirement and h >= self._large_height_requirement):
+				return w, h
+		w = min(room_max, max(room_min, self._large_width_requirement))
+		h = min(room_max, max(room_min, self._large_height_requirement))
+		return w, h
+
+	def _axis_steps(self, start: int, end: int) -> List[int]:
+		points: List[int] = []
+		current = start
+		while current != end:
+			delta = end - current
+			if abs(delta) <= self._max_hallway_segment:
+				current = end
+				points.append(current)
+			else:
+				step = self._max_hallway_segment if delta > 0 else -self._max_hallway_segment
+				current += step
+				points.append(current)
+		return points
+
+	def _carve_corridor(self, start: tuple[int, int], end: tuple[int, int], horizontal_first: bool = True) -> None:
+		sx, sy = start
+		ex, ey = end
+		cx, cy = sx, sy
+		if horizontal_first:
+			for tx in self._axis_steps(cx, ex):
+				self.carve_h_tunnel(cx, tx, cy)
+				cx = tx
+			for ty in self._axis_steps(cy, ey):
+				self.carve_v_tunnel(cy, ty, cx)
+				cy = ty
+		else:
+			for ty in self._axis_steps(cy, ey):
+				self.carve_v_tunnel(cy, ty, cx)
+				cy = ty
+			for tx in self._axis_steps(cx, ex):
+				self.carve_h_tunnel(cx, tx, cy)
+				cx = tx
+
+	def _limit_center_distance(self, anchor: tuple[int, int], candidate: tuple[int, int]) -> tuple[int, int]:
+		ax, ay = anchor
+		sx, sy = candidate
+		dx = sx - ax
+		dy = sy - ay
+		limit = max(1, self._max_hallway_segment)
+		if abs(dx) + abs(dy) <= limit:
+			return candidate
+		if dx == 0 and dy == 0:
+			return candidate
+		scale = limit / max(1, abs(dx) + abs(dy))
+		new_dx = int(round(dx * scale))
+		new_dy = int(round(dy * scale))
+		# Ensure at least 1 step if original difference was non-zero
+		if new_dx == 0 and dx != 0:
+			new_dx = 1 if dx > 0 else -1
+		if new_dy == 0 and dy != 0:
+			new_dy = 1 if dy > 0 else -1
+		# Clamp again if rounding pushed us over the limit
+		while abs(new_dx) + abs(new_dy) > limit:
+			if abs(new_dx) >= abs(new_dy) and new_dx != 0:
+				new_dx -= 1 if new_dx > 0 else -1
+			elif new_dy != 0:
+				new_dy -= 1 if new_dy > 0 else -1
+		return ax + new_dx, ay + new_dy
 
 	def add_door(self, x, y, locked=False):
 		"""Places a door at (x,y) if it's a valid wall location between floors."""
@@ -273,6 +376,13 @@ class Dungeon:
 			linearity (float): 0.0 = random placement, 1.0 = perfectly linear progression (series)
 			entropy (float): 0.0 = no side rooms, 1.0 = many side rooms off main path
 		"""
+		self._rooms_total = 0
+		self._rooms_large = 0
+		self._max_rooms_planned = max_rooms
+		self._large_width_requirement = max(MIN_LARGE_ROOM_WIDTH, room_min)
+		self._large_height_requirement = max(MIN_LARGE_ROOM_HEIGHT, room_min)
+		self._enforce_large_rooms = room_max >= self._large_width_requirement and room_max >= self._large_height_requirement
+		self._max_hallway_segment = max(6, min(MAX_HALLWAY_SEGMENT, max(self.w, self.h)))
 		if linearity >= 0.8:
 			# High linearity: create a linear chain of rooms (series connection)
 			self._generate_linear(max_rooms, room_min, room_max, entropy)
@@ -320,14 +430,17 @@ class Dungeon:
 					break  # Don't place rooms too close to edge
 				
 				# Keep rooms aligned vertically
-				w = random.randint(room_min, room_max)
-				h = random.randint(room_min, room_max)
-				x = max(1, min(self.w - w - 1, center_x - w // 2))
-				y = max(1, min(self.h - h - 1, center_y - h // 2))
+				w, h = self._pick_room_size(room_min, room_max)
+				candidate_center = (center_x, center_y)
+				if self.rooms:
+					candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+				center_x_adj, center_y_adj = candidate_center
+				x = max(1, min(self.w - w - 1, center_x_adj - w // 2))
+				y = max(1, min(self.h - h - 1, center_y_adj - h // 2))
 				
 				new_room = Rect(x, y, w, h)
 				self.carve_room(new_room)
-				self.rooms.append(new_room)
+				self._register_room(new_room)
 		else:
 			# Vertical chain: evenly spaced along y-axis
 			spacing = max(room_max + 3, self.h // (max_rooms + 1))
@@ -340,33 +453,23 @@ class Dungeon:
 					break  # Don't place rooms too close to edge
 				
 				# Keep rooms aligned horizontally
-				w = random.randint(room_min, room_max)
-				h = random.randint(room_min, room_max)
-				x = max(1, min(self.w - w - 1, center_x - w // 2))
-				y = max(1, min(self.h - h - 1, center_y - h // 2))
+				w, h = self._pick_room_size(room_min, room_max)
+				candidate_center = (center_x, center_y)
+				if self.rooms:
+					candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+				center_x_adj, center_y_adj = candidate_center
+				x = max(1, min(self.w - w - 1, center_x_adj - w // 2))
+				y = max(1, min(self.h - h - 1, center_y_adj - h // 2))
 				
 				new_room = Rect(x, y, w, h)
 				self.carve_room(new_room)
-				self.rooms.append(new_room)
+				self._register_room(new_room)
 		
 		# Connect rooms with simple straight corridors only
 		for i in range(1, len(self.rooms)):
 			prev_center = self.rooms[i-1].center()
 			curr_center = self.rooms[i].center()
-			
-			# Create single straight corridor between consecutive rooms
-			if horizontal:
-				# Horizontal progression: connect with straight horizontal corridor
-				self.carve_h_tunnel(prev_center[0], curr_center[0], prev_center[1])
-				# Only add vertical segment if rooms are at different y levels
-				if prev_center[1] != curr_center[1]:
-					self.carve_v_tunnel(prev_center[1], curr_center[1], curr_center[0])
-			else:
-				# Vertical progression: connect with straight vertical corridor
-				self.carve_v_tunnel(prev_center[1], curr_center[1], prev_center[0])
-				# Only add horizontal segment if rooms are at different x levels
-				if prev_center[0] != curr_center[0]:
-					self.carve_h_tunnel(prev_center[0], curr_center[0], curr_center[1])
+			self._carve_corridor(prev_center, curr_center, horizontal_first=horizontal)
 
 	def _setup_throne_room(self) -> None:
 		"""Mark the last room as a throne room and give it special materials."""
@@ -409,6 +512,7 @@ class Dungeon:
 		if horizontal:
 			# Horizontal progression: left to right with Y variation
 			segment_width = max(room_max + 4, self.w // max_rooms)
+			segment_width = min(segment_width, self._max_hallway_segment + room_max // 2 + 2)
 			base_y = self.h // 2  # Base Y position
 			y_variation = min(self.h // 3, room_max * 2)  # Allow more Y variation
 			
@@ -426,10 +530,13 @@ class Dungeon:
 				placed = False
 				attempts = 0
 				while attempts < 20 and not placed:
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
-					x = max(1, min(self.w - w - 1, center_x - w // 2))
-					y = max(1, min(self.h - h - 1, target_y - h // 2))
+					w, h = self._pick_room_size(room_min, room_max)
+					candidate_center = (center_x, target_y)
+					if self.rooms:
+						candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+					center_x_adj, target_y_adj = candidate_center
+					x = max(1, min(self.w - w - 1, center_x_adj - w // 2))
+					y = max(1, min(self.h - h - 1, target_y_adj - h // 2))
 					
 					new_room = Rect(x, y, w, h)
 					
@@ -445,7 +552,7 @@ class Dungeon:
 					
 					if not overlaps:
 						self.carve_room(new_room)
-						self.rooms.append(new_room)
+						self._register_room(new_room)
 						placed = True
 					else:
 						# If overlap, try different Y position
@@ -456,6 +563,7 @@ class Dungeon:
 		else:
 			# Vertical progression: top to bottom with X variation
 			segment_height = max(room_max + 4, self.h // max_rooms)
+			segment_height = min(segment_height, self._max_hallway_segment + room_max // 2 + 2)
 			base_x = self.w // 2  # Base X position
 			x_variation = min(self.w // 3, room_max * 2)  # Allow more X variation
 			
@@ -473,10 +581,13 @@ class Dungeon:
 				placed = False
 				attempts = 0
 				while attempts < 20 and not placed:
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
-					x = max(1, min(self.w - w - 1, target_x - w // 2))
-					y = max(1, min(self.h - h - 1, center_y - h // 2))
+					w, h = self._pick_room_size(room_min, room_max)
+					candidate_center = (target_x, center_y)
+					if self.rooms:
+						candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+					target_x_adj, center_y_adj = candidate_center
+					x = max(1, min(self.w - w - 1, target_x_adj - w // 2))
+					y = max(1, min(self.h - h - 1, center_y_adj - h // 2))
 					
 					new_room = Rect(x, y, w, h)
 					
@@ -492,7 +603,7 @@ class Dungeon:
 					
 					if not overlaps:
 						self.carve_room(new_room)
-						self.rooms.append(new_room)
+						self._register_room(new_room)
 						placed = True
 					else:
 						# If overlap, try different X position
@@ -511,23 +622,11 @@ class Dungeon:
 			y_diff = abs(prev_center[1] - curr_center[1])
 			
 			if x_diff <= 3 and y_diff > x_diff * 2:
-				# Rooms are nearly vertically aligned - use vertical corridor
-				avg_x = (prev_center[0] + curr_center[0]) // 2
-				self.carve_v_tunnel(prev_center[1], curr_center[1], avg_x)
+				self._carve_corridor(prev_center, curr_center, horizontal_first=False)
 			elif y_diff <= 3 and x_diff > y_diff * 2:
-				# Rooms are nearly horizontally aligned - use horizontal corridor
-				avg_y = (prev_center[1] + curr_center[1]) // 2
-				self.carve_h_tunnel(prev_center[0], curr_center[0], avg_y)
+				self._carve_corridor(prev_center, curr_center, horizontal_first=True)
 			else:
-				# Rooms need L-shaped connection - choose optimal direction first
-				if x_diff > y_diff:
-					# More horizontal distance - go horizontal first
-					self.carve_h_tunnel(prev_center[0], curr_center[0], prev_center[1])
-					self.carve_v_tunnel(prev_center[1], curr_center[1], curr_center[0])
-				else:
-					# More vertical distance - go vertical first
-					self.carve_v_tunnel(prev_center[1], curr_center[1], prev_center[0])
-					self.carve_h_tunnel(prev_center[0], curr_center[0], curr_center[1])
+				self._carve_corridor(prev_center, curr_center, horizontal_first=(x_diff >= y_diff))
 
 		# Add side rooms based on entropy
 		if entropy > 0.0 and len(self.rooms) > 0:
@@ -540,52 +639,45 @@ class Dungeon:
 				# Try to place a side room near this main room
 				for attempt in range(10):  # multiple attempts per side room
 					# Choose a direction: perpendicular to main path
-					if horizontal:
-						# Main path is horizontal, so side rooms go up/down
-						side_direction = random.choice([-1, 1])  # up or down
-						side_distance = random.randint(room_max + 3, room_max * 2 + 5)
-						side_x = main_center[0] + random.randint(-room_max, room_max)  # some X variation
-						side_y = main_center[1] + side_direction * side_distance
-					else:
-						# Main path is vertical, so side rooms go left/right
-						side_direction = random.choice([-1, 1])  # left or right
-						side_distance = random.randint(room_max + 3, room_max * 2 + 5)
-						side_x = main_center[0] + side_direction * side_distance
-						side_y = main_center[1] + random.randint(-room_max, room_max)  # some Y variation
-					
-					# Try to place the side room
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
-					x = max(1, min(self.w - w - 1, side_x - w // 2))
-					y = max(1, min(self.h - h - 1, side_y - h // 2))
-					
-					side_room = Rect(x, y, w, h)
-					
-					# Check for overlap with existing rooms
-					overlaps = False
-					for existing in self.rooms:
-						buffered = Rect(existing.x1 - 2, existing.y1 - 2, 
-									  (existing.x2 - existing.x1) + 4, (existing.y2 - existing.y1) + 4)
-						if side_room.intersect(buffered):
-							overlaps = True
-							break
-					
-					if not overlaps:
-						self.carve_room(side_room)
-						self.rooms.append(side_room)
-						
-						# Connect side room to main room with corridor
-						side_center = side_room.center()
 						if horizontal:
-							# Connect vertically then horizontally
-							self.carve_v_tunnel(main_center[1], side_center[1], main_center[0])
-							self.carve_h_tunnel(main_center[0], side_center[0], side_center[1])
+							# Main path is horizontal, so side rooms go up/down
+							side_direction = random.choice([-1, 1])
+							max_side_distance = max(room_min + 2, min(self._max_hallway_segment, room_max * 2 + 5))
+							side_distance = random.randint(room_min + 2, max_side_distance)
+							side_x = main_center[0] + random.randint(-room_max, room_max)
+							side_y = main_center[1] + side_direction * side_distance
 						else:
-							# Connect horizontally then vertically
-							self.carve_h_tunnel(main_center[0], side_center[0], main_center[1])
-							self.carve_v_tunnel(main_center[1], side_center[1], side_center[0])
+							# Main path is vertical, so side rooms go left/right
+							side_direction = random.choice([-1, 1])
+							max_side_distance = max(room_min + 2, min(self._max_hallway_segment, room_max * 2 + 5))
+							side_distance = random.randint(room_min + 2, max_side_distance)
+							side_x = main_center[0] + side_direction * side_distance
+							side_y = main_center[1] + random.randint(-room_max, room_max)
 						
-						break  # Successfully placed side room
+						# Try to place the side room
+						w, h = self._pick_room_size(room_min, room_max)
+						candidate_center = (side_x, side_y)
+						candidate_center = self._limit_center_distance(main_center, candidate_center)
+						side_x_adj, side_y_adj = candidate_center
+						x = max(1, min(self.w - w - 1, side_x_adj - w // 2))
+						y = max(1, min(self.h - h - 1, side_y_adj - h // 2))
+						# Recompute rect at adjusted position
+						side_room = Rect(x, y, w, h)
+						# Check for overlap with existing rooms
+						overlaps = False
+						for existing in self.rooms:
+							buffered = Rect(existing.x1 - 2, existing.y1 - 2,
+										  (existing.x2 - existing.x1) + 4, (existing.y2 - existing.y1) + 4)
+							if side_room.intersect(buffered):
+								overlaps = True
+								break
+						if not overlaps:
+							self.carve_room(side_room)
+							self._register_room(side_room)
+							# Connect side room to main room with corridor
+							side_center = side_room.center()
+							self._carve_corridor(main_center, side_center, horizontal_first=horizontal)
+							break  # Successfully placed side room
 
 	def _generate_biased_linear(self, max_rooms: int, room_min: int, room_max: int, linearity: float, entropy: float = 0.0):
 		"""Generate rooms with bias toward linear progression but some randomness.
@@ -604,6 +696,7 @@ class Dungeon:
 			# Create perfectly linear chain, but with some path variance based on linearity
 			if horizontal:
 				segment_width = max(room_max + 2, self.w // max_rooms)
+				segment_width = min(segment_width, self._max_hallway_segment + room_max // 2 + 2)
 				base_y = self.h // 2
 				y_variation = int((1.0 - linearity) * min(self.h // 4, room_max))
 				
@@ -616,10 +709,13 @@ class Dungeon:
 					y_offset = random.randint(-y_variation, y_variation)
 					target_y = base_y + y_offset
 					
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
-					x = max(1, min(self.w - w - 1, center_x - w // 2))
-					y = max(1, min(self.h - h - 1, target_y - h // 2))
+					w, h = self._pick_room_size(room_min, room_max)
+					candidate_center = (center_x, target_y)
+					if self.rooms:
+						candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+					center_x_adj, target_y_adj = candidate_center
+					x = max(1, min(self.w - w - 1, center_x_adj - w // 2))
+					y = max(1, min(self.h - h - 1, target_y_adj - h // 2))
 					
 					new_room = Rect(x, y, w, h)
 					
@@ -627,17 +723,14 @@ class Dungeon:
 					overlaps = any(new_room.intersect(other) for other in self.rooms)
 					if not overlaps:
 						self.carve_room(new_room)
-						
-						# Connect to previous room with straight corridors
 						if self.rooms:
 							prev_center = self.rooms[-1].center()
 							curr_center = new_room.center()
-							self.carve_h_tunnel(prev_center[0], curr_center[0], prev_center[1])
-							self.carve_v_tunnel(prev_center[1], curr_center[1], curr_center[0])
-						
-						self.rooms.append(new_room)
+							self._carve_corridor(prev_center, curr_center, horizontal_first=True)
+						self._register_room(new_room)
 			else:
 				segment_height = max(room_max + 2, self.h // max_rooms)
+				segment_height = min(segment_height, self._max_hallway_segment + room_max // 2 + 2)
 				base_x = self.w // 2
 				x_variation = int((1.0 - linearity) * min(self.w // 4, room_max))
 				
@@ -650,10 +743,13 @@ class Dungeon:
 					x_offset = random.randint(-x_variation, x_variation)
 					target_x = base_x + x_offset
 					
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
-					x = max(1, min(self.w - w - 1, target_x - w // 2))
-					y = max(1, min(self.h - h - 1, center_y - h // 2))
+					w, h = self._pick_room_size(room_min, room_max)
+					candidate_center = (target_x, center_y)
+					if self.rooms:
+						candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+					target_x_adj, center_y_adj = candidate_center
+					x = max(1, min(self.w - w - 1, target_x_adj - w // 2))
+					y = max(1, min(self.h - h - 1, center_y_adj - h // 2))
 					
 					new_room = Rect(x, y, w, h)
 					
@@ -661,15 +757,11 @@ class Dungeon:
 					overlaps = any(new_room.intersect(other) for other in self.rooms)
 					if not overlaps:
 						self.carve_room(new_room)
-						
-						# Connect to previous room with straight corridors
 						if self.rooms:
 							prev_center = self.rooms[-1].center()
 							curr_center = new_room.center()
-							self.carve_v_tunnel(prev_center[1], curr_center[1], prev_center[0])
-							self.carve_h_tunnel(prev_center[0], curr_center[0], curr_center[1])
-						
-						self.rooms.append(new_room)
+							self._carve_corridor(prev_center, curr_center, horizontal_first=False)
+						self._register_room(new_room)
 			return
 		else:
 			# Original biased placement for entropy > 0
@@ -678,8 +770,7 @@ class Dungeon:
 				placed = False
 				
 				while attempts < 50 and not placed:
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
+					w, h = self._pick_room_size(room_min, room_max)
 					
 					if not self.rooms:
 						# First room - place somewhat toward start
@@ -708,11 +799,18 @@ class Dungeon:
 											 min(self.h - h - 1, ideal_y + y_variance))
 							x = random.randint(1, max(1, self.w - w - 1))
 					
+					candidate_center = (x + w // 2, y + h // 2)
+					if self.rooms:
+						candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+					cx, cy = candidate_center
+					x = max(1, min(self.w - w - 1, cx - w // 2))
+					y = max(1, min(self.h - h - 1, cy - h // 2))
+					
 					new_room = Rect(x, y, w, h)
 					
 					if not any(new_room.intersect(other) for other in self.rooms):
 						self.carve_room(new_room)
-						self.rooms.append(new_room)
+						self._register_room(new_room)
 						placed = True
 					
 					attempts += 1
@@ -723,19 +821,9 @@ class Dungeon:
 			curr_center = self.rooms[i].center()
 			
 			if random.random() < 0.5 + bias_strength * 0.3:
-				if horizontal:
-					self.carve_h_tunnel(prev_center[0], curr_center[0], prev_center[1])
-					self.carve_v_tunnel(prev_center[1], curr_center[1], curr_center[0])
-				else:
-					self.carve_v_tunnel(prev_center[1], curr_center[1], prev_center[0])
-					self.carve_h_tunnel(prev_center[0], curr_center[0], curr_center[1])
+				self._carve_corridor(prev_center, curr_center, horizontal_first=horizontal)
 			else:
-				if horizontal:
-					self.carve_v_tunnel(prev_center[1], curr_center[1], prev_center[0])
-					self.carve_h_tunnel(prev_center[0], curr_center[0], curr_center[1])
-				else:
-					self.carve_h_tunnel(prev_center[0], curr_center[0], prev_center[1])
-					self.carve_v_tunnel(prev_center[1], curr_center[1], curr_center[0])
+				self._carve_corridor(prev_center, curr_center, horizontal_first=not horizontal)
 
 		# Add side rooms based on entropy (similar to linear method but less structured)
 		if entropy > 0.0 and len(self.rooms) > 1:
@@ -750,14 +838,16 @@ class Dungeon:
 					# Random direction and distance
 					angle = random.uniform(0, 2 * 3.14159)  # random angle
 					distance = random.randint(room_max + 2, room_max * 2)
-					side_x = int(main_center[0] + distance * random.uniform(-1, 1))
-					side_y = int(main_center[1] + distance * random.uniform(-1, 1))
+					side_x = int(main_center[0] + distance * math.cos(angle))
+					side_y = int(main_center[1] + distance * math.sin(angle))
 					
 					# Try to place the side room
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
-					x = max(1, min(self.w - w - 1, side_x - w // 2))
-					y = max(1, min(self.h - h - 1, side_y - h // 2))
+					w, h = self._pick_room_size(room_min, room_max)
+					candidate_center = (side_x, side_y)
+					candidate_center = self._limit_center_distance(main_center, candidate_center)
+					side_x_adj, side_y_adj = candidate_center
+					x = max(1, min(self.w - w - 1, side_x_adj - w // 2))
+					y = max(1, min(self.h - h - 1, side_y_adj - h // 2))
 					
 					side_room = Rect(x, y, w, h)
 					
@@ -766,16 +856,11 @@ class Dungeon:
 					
 					if not overlaps:
 						self.carve_room(side_room)
-						self.rooms.append(side_room)
+						self._register_room(side_room)
 						
 						# Connect side room to main room
 						side_center = side_room.center()
-						if random.random() < 0.5:
-							self.carve_h_tunnel(main_center[0], side_center[0], main_center[1])
-							self.carve_v_tunnel(main_center[1], side_center[1], side_center[0])
-						else:
-							self.carve_v_tunnel(main_center[1], side_center[1], main_center[0])
-							self.carve_h_tunnel(main_center[0], side_center[0], side_center[1])
+						self._carve_corridor(main_center, side_center, horizontal_first=random.random() < 0.5)
 						
 						break  # Successfully placed side room
 
@@ -794,40 +879,53 @@ class Dungeon:
 		h_then_v_prob = 0.5 + (linearity * 0.25)  # Reduced impact for low linearity
 		
 		for _ in range(max_rooms):
-			w = random.randint(room_min, room_max)
-			h = random.randint(room_min, room_max)
-			x = random.randint(1, max(1, self.w - w - 2))
-			y = random.randint(1, max(1, self.h - h - 2))
-			new_room = Rect(x, y, w, h)
+			placed = False
+			for attempt in range(40):
+				w, h = self._pick_room_size(room_min, room_max)
+				x = random.randint(1, max(1, self.w - w - 2))
+				y = random.randint(1, max(1, self.h - h - 2))
+				candidate_center = (x + w // 2, y + h // 2)
+				if self.rooms:
+					candidate_center = self._limit_center_distance(self.rooms[-1].center(), candidate_center)
+					cx, cy = candidate_center
+					x = max(1, min(self.w - w - 1, cx - w // 2))
+					y = max(1, min(self.h - h - 1, cy - h // 2))
+				new_room = Rect(x, y, w, h)
 
-			if any(new_room.intersect(other) for other in self.rooms):
-				continue
+				if any(new_room.intersect(other) for other in self.rooms):
+					continue
 
-			self.carve_room(new_room)
-			
-			if self.rooms:
-				# connect to previous room with a corridor
-				prev_center = self.rooms[-1].center()
-				curr_center = new_room.center()
+				self.carve_room(new_room)
 				
-				if random.random() < h_then_v_prob:
-					self.carve_h_tunnel(prev_center[0], curr_center[0], prev_center[1])
-					self.carve_v_tunnel(prev_center[1], curr_center[1], curr_center[0])
-				else:
-					self.carve_v_tunnel(prev_center[1], curr_center[1], prev_center[0])
-					self.carve_h_tunnel(prev_center[0], curr_center[0], curr_center[1])
+				if self.rooms:
+					# connect to previous room with a corridor
+					prev_center = self.rooms[-1].center()
+					curr_center = new_room.center()
+					
+					self._carve_corridor(prev_center, curr_center, horizontal_first=random.random() < h_then_v_prob)
 
-			self.rooms.append(new_room)
+				self._register_room(new_room)
+				placed = True
+				break
+			if not placed:
+				continue
 
 		# For random generation, entropy just adds extra randomly placed rooms
 		if entropy > 0.0 and len(self.rooms) > 0:
 			extra_room_count = int(entropy * max_rooms * 0.8)  # up to 80% more rooms
 			for _ in range(extra_room_count):
 				for attempt in range(30):  # many attempts for random placement
-					w = random.randint(room_min, room_max)
-					h = random.randint(room_min, room_max)
+					w, h = self._pick_room_size(room_min, room_max)
 					x = random.randint(1, max(1, self.w - w - 2))
 					y = random.randint(1, max(1, self.h - h - 2))
+					candidate_center = (x + w // 2, y + h // 2)
+					if self.rooms:
+						nearest_room = min(self.rooms, key=lambda r: 
+							abs(r.center()[0] - candidate_center[0]) + abs(r.center()[1] - candidate_center[1]))
+						candidate_center = self._limit_center_distance(nearest_room.center(), candidate_center)
+						cx, cy = candidate_center
+						x = max(1, min(self.w - w - 1, cx - w // 2))
+						y = max(1, min(self.h - h - 1, cy - h // 2))
 					new_room = Rect(x, y, w, h)
 
 					if not any(new_room.intersect(other) for other in self.rooms):
@@ -839,14 +937,9 @@ class Dungeon:
 							abs(r.center()[0] - new_center[0]) + abs(r.center()[1] - new_center[1]))
 						nearest_center = nearest_room.center()
 						
-						if random.random() < h_then_v_prob:
-							self.carve_h_tunnel(nearest_center[0], new_center[0], nearest_center[1])
-							self.carve_v_tunnel(nearest_center[1], new_center[1], new_center[0])
-						else:
-							self.carve_v_tunnel(nearest_center[1], new_center[1], nearest_center[0])
-							self.carve_h_tunnel(nearest_center[0], new_center[0], new_center[1])
+						self._carve_corridor(nearest_center, new_center, horizontal_first=random.random() < h_then_v_prob)
 						
-						self.rooms.append(new_room)
+						self._register_room(new_room)
 						break
 
 	def is_wall(self, x: int, y: int) -> bool:
@@ -997,12 +1090,9 @@ def generate_dungeon(
 					continue
 				(ax, ay) = a.center()
 				(bx, by) = b.center()
-				if random.random() < 0.5:
-					d.carve_h_tunnel(ax, bx, ay)
-					d.carve_v_tunnel(ay, by, bx)
-				else:
-					d.carve_v_tunnel(ay, by, ax)
-					d.carve_h_tunnel(ax, bx, by)
+				if abs(ax - bx) + abs(ay - by) > d._max_hallway_segment:
+					continue
+				d._carve_corridor((ax, ay), (bx, by), horizontal_first=random.random() < 0.5)
 
 		return d
 	finally:

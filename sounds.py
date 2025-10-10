@@ -9,6 +9,9 @@ import pygame.sndarray
 import numpy as np
 import random
 import math
+from typing import Optional
+
+from sound_library import get_sound_library, SoundLibrary
 
 
 class SoundGenerator:
@@ -22,9 +25,44 @@ class SoundGenerator:
 		"""
 		self.sample_rate = sample_rate
 		# Don't re-initialize mixer if already initialized (to avoid conflicts with music system)
-		if not pygame.mixer.get_init():
+		init_state = pygame.mixer.get_init()
+		if not init_state:
 			pygame.mixer.init(frequency=sample_rate, size=-16, channels=2, buffer=512)
+			init_state = pygame.mixer.get_init()
 		self.sounds = {}
+		self._bat_squeak_base = None
+		self._bat_squeak_rate = init_state[0] if init_state else self.sample_rate
+		self._bat_squeak_channels = init_state[2] if init_state else 2
+		self._secret_discovery_sound = None
+		self._library: Optional[SoundLibrary] = None
+
+	def _ensure_secret_discovery_sound(self) -> None:
+		if self._secret_discovery_sound is not None:
+			return
+		if self._library is None:
+			try:
+				self._library = get_sound_library()
+			except Exception:
+				self._library = None
+		if self._library is not None:
+			try:
+				sound = self._library.load_sound("click_1")
+				self._secret_discovery_sound = sound
+				return
+			except Exception:
+				self._secret_discovery_sound = None
+		sample_path = os.path.join(os.path.dirname(__file__), 'resources', 'sounds', 'click_1.wav')
+		if not os.path.isfile(sample_path):
+			raise FileNotFoundError(f"Missing secret discovery sample: {sample_path}")
+		self._secret_discovery_sound = pygame.mixer.Sound(sample_path)
+
+	def play_secret_discovery_sound(self, volume: float = 0.6) -> None:
+		self._ensure_secret_discovery_sound()
+		if self._secret_discovery_sound is None:
+			raise RuntimeError("Secret discovery sound failed to load")
+		channel = self._secret_discovery_sound.play()
+		if channel:
+			channel.set_volume(max(0.0, min(1.0, float(volume))))
 	
 	def generate_sine_wave(self, frequency, duration, amplitude=0.5):
 		"""Generate a sine wave.
@@ -431,16 +469,113 @@ class SoundGenerator:
 		Returns:
 			pygame.Sound object
 		"""
+		mixer_state = pygame.mixer.get_init()
+		channels = mixer_state[2] if mixer_state else 1
 		# Normalize and convert to 16-bit integers
 		samples = np.clip(samples, -1, 1)
-		samples = (samples * 32767).astype(np.int16)
-		
-		# Convert to bytes
-		sound_bytes = samples.tobytes()
-		
-		# Create pygame sound
-		sound = pygame.mixer.Sound(buffer=sound_bytes)
-		return sound
+		if samples.ndim == 1:
+			samples = samples[:, np.newaxis]
+		if samples.shape[1] != channels:
+			if channels == 2 and samples.shape[1] == 1:
+				samples = np.repeat(samples, 2, axis=1)
+			else:
+				samples = np.tile(samples, (1, max(1, channels)))
+		int_samples = (samples * 32767).astype(np.int16, copy=False)
+		return pygame.sndarray.make_sound(int_samples)
+
+	def _ensure_bat_squeak_loaded(self):
+		if self._bat_squeak_base is not None:
+			return
+		sample_path = os.path.join(os.path.dirname(__file__), 'resources', 'sounds', 'bat_squeak.mp3')
+		if not os.path.isfile(sample_path):
+			raise FileNotFoundError(f"Missing bat squeak sample: {sample_path}")
+		base_sound = pygame.mixer.Sound(sample_path)
+		array = pygame.sndarray.array(base_sound).astype(np.float32)
+		if array.ndim == 1:
+			array = array[:, np.newaxis]
+		max_val = float(np.max(np.abs(array))) if array.size else 0.0
+		if max_val > 0:
+			array /= max_val
+		else:
+			array = np.zeros_like(array, dtype=np.float32)
+		self._bat_squeak_base = array
+		mixer_state = pygame.mixer.get_init()
+		if mixer_state:
+			self._bat_squeak_rate = mixer_state[0]
+			self._bat_squeak_channels = mixer_state[2]
+		else:
+			self._bat_squeak_rate = self.sample_rate
+			self._bat_squeak_channels = array.shape[1]
+
+	def _apply_edge_fade(self, samples: np.ndarray, sample_rate: int, fade_ms: float = 18.0) -> np.ndarray:
+		tapered = samples.copy()
+		if tapered.size == 0:
+			return tapered
+		fade_samples = int(sample_rate * (fade_ms / 1000.0))
+		fade_samples = max(1, min(fade_samples, tapered.shape[0] // 2))
+		if fade_samples <= 0:
+			return tapered
+		envelope = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+		tapered[:fade_samples] *= envelope[:, np.newaxis]
+		tapered[-fade_samples:] *= envelope[::-1][:, np.newaxis]
+		return tapered
+
+	def _apply_mild_random_reverb(self, samples: np.ndarray, sample_rate: int, channels: int) -> np.ndarray:
+		if samples.size == 0:
+			return samples
+		delay_ms = random.uniform(35.0, 70.0)
+		delay_samples = max(1, int(sample_rate * (delay_ms / 1000.0)))
+		tail_multiplier = random.uniform(1.6, 2.4)
+		tail_samples = max(delay_samples, int(delay_samples * tail_multiplier))
+		length = samples.shape[0] + tail_samples
+		output = np.zeros((length, channels), dtype=np.float32)
+		output[:samples.shape[0]] += samples
+		primary_decay = random.uniform(0.28, 0.42)
+		secondary_decay = primary_decay * random.uniform(0.45, 0.7)
+		tertiary_decay = secondary_decay * random.uniform(0.35, 0.6)
+		first_start = delay_samples
+		first_end = min(first_start + samples.shape[0], length)
+		output[first_start:first_end] += samples[:first_end - first_start] * primary_decay
+		second_start = delay_samples * 2
+		if second_start < length:
+			second_end = min(second_start + samples.shape[0], length)
+			output[second_start:second_end] += samples[:second_end - second_start] * secondary_decay
+		third_start = int(delay_samples * 3.2)
+		if tertiary_decay > 0.01 and third_start < length:
+			third_end = min(third_start + samples.shape[0], length)
+			output[third_start:third_end] += samples[:third_end - third_start] * tertiary_decay
+		noise_len = length - samples.shape[0]
+		if noise_len > 0:
+			tail_noise = np.random.normal(0.0, 0.012, (noise_len, channels)).astype(np.float32)
+			envelope = np.linspace(1.0, 0.0, noise_len, dtype=np.float32)
+			tail_noise *= envelope[:, np.newaxis] * (primary_decay * 0.5)
+			output[samples.shape[0]:] += tail_noise
+		return output
+
+	def generate_bat_squeak_sample(self):
+		"""Load bat_squeak.mp3, vary pitch slightly, and add mild random reverb."""
+		self._ensure_bat_squeak_loaded()
+		if self._bat_squeak_base is None:
+			raise RuntimeError("Bat squeak sample failed to load")
+		base = self._bat_squeak_base
+		pitch_factor = random.uniform(0.92, 1.08)
+		orig_len = base.shape[0]
+		target_len = max(1, int(round(orig_len / pitch_factor)))
+		orig_idx = np.arange(orig_len, dtype=np.float32)
+		target_idx = np.linspace(0, orig_len - 1, target_len, dtype=np.float32)
+		stretched = np.zeros((target_len, base.shape[1]), dtype=np.float32)
+		for ch in range(base.shape[1]):
+			stretched[:, ch] = np.interp(target_idx, orig_idx, base[:, ch])
+		segment = self._apply_edge_fade(stretched, self._bat_squeak_rate)
+		reverbed = self._apply_mild_random_reverb(segment, self._bat_squeak_rate, self._bat_squeak_channels)
+		if reverbed.size == 0:
+			reverbed = segment
+		max_val = float(np.max(np.abs(reverbed))) if reverbed.size else 0.0
+		if max_val > 0:
+			reverbed = reverbed / (max_val * 1.15)
+		reverbed *= random.uniform(0.7, 0.85)
+		reverbed = np.clip(reverbed, -1.0, 1.0)
+		return self._samples_to_sound(reverbed)
 	
 	def pregenerate_sounds(self, variations_per_type=3):
 		"""Pre-generate variations of each sound type.
@@ -453,6 +588,7 @@ class SoundGenerator:
 			('rat_scurry', self.generate_rat_scurry),
 			('bat_screech', self.generate_bat_screech),
 			('bat_wings', self.generate_bat_wings),
+			('bat_squeak', self.generate_bat_squeak_sample),
 			('water_drip', self.generate_water_drip),
 			('water_echo', self.generate_water_echo),
 			('metal_creak', self.generate_metal_creak),

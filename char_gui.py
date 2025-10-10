@@ -240,11 +240,32 @@ ERROR_COLOR = (255, 100, 100)  # Red for errors
 CELL_HEIGHT = 15  # Match game's cell height for font building
 
 class CharacterCreatorGUI:
-    def __init__(self):
-        pygame.init()
-        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    def __init__(self, screen: Optional[pygame.Surface] = None, clock: Optional[pygame.time.Clock] = None):
+        global WINDOW_WIDTH, WINDOW_HEIGHT
+        self._owns_pygame = False
+        self._owns_display = False
+        self._owns_clock = False
+        self._prev_caption = pygame.display.get_caption()
+        self._orig_dims = (WINDOW_WIDTH, WINDOW_HEIGHT)
+
+        if not pygame.get_init():
+            pygame.init()
+            self._owns_pygame = True
+
+        if screen is None:
+            self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+            self._owns_display = True
+        else:
+            self.screen = screen
+            WINDOW_WIDTH, WINDOW_HEIGHT = self.screen.get_size()
+
         pygame.display.set_caption("AD&D 2nd Edition Character Creator")
-        self.clock = pygame.time.Clock()
+
+        if clock is None:
+            self.clock = pygame.time.Clock()
+            self._owns_clock = True
+        else:
+            self.clock = clock
         
         # Suspend dungeon water-drip SFX while the character creator is open
         self._suspend_drip_sfx()
@@ -257,6 +278,18 @@ class CharacterCreatorGUI:
         parchment_renderer = ParchmentRenderer(base_color=PARCHMENT_BG, ink_color=INK_DARK, enable_vignette=False, grain_tile=10)
         parchment_renderer.build_layers(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.parchment_bg = parchment_renderer.generate(WINDOW_WIDTH, WINDOW_HEIGHT)
+
+    def finalize(self):
+        prev = self._prev_caption if isinstance(self._prev_caption, (list, tuple)) else None
+        if prev:
+            title, icon = prev if len(prev) == 2 else (prev[0], "")
+            pygame.display.set_caption(title, icon)
+        global WINDOW_WIDTH, WINDOW_HEIGHT
+        WINDOW_WIDTH, WINDOW_HEIGHT = self._orig_dims
+        if self._owns_display:
+            pygame.display.quit()
+        if self._owns_pygame:
+            pygame.quit()
     
     def _suspend_drip_sfx(self):
         """Pause the global water-drip scheduler so it only plays in-game."""
@@ -1040,10 +1073,16 @@ class CharacterCreatorGUI:
         
         return True
 
-def run_character_creator():
-    """Run the character creator and return the created/loaded character"""
+def run_character_creator(screen: Optional[pygame.Surface] = None, clock: Optional[pygame.time.Clock] = None):
+    """Run the character creator and return the created/loaded character.
+
+    Args:
+        screen: Optional existing pygame surface to render into.
+        clock: Optional shared clock for frame pacing.
+    """
+    creator: Optional[CharacterCreatorGUI] = None
     try:
-        creator = CharacterCreatorGUI()
+        creator = CharacterCreatorGUI(screen=screen, clock=clock)
         character = creator.run()
         
         # Leave drip SFX stopped; gameplay loop will resume scheduling when appropriate
@@ -1051,14 +1090,15 @@ def run_character_creator():
         if drip_sfx:
             drip_sfx.stop()
         
-        pygame.quit()
         return character
     except Exception as e:
         print(f"Error in character creator: {e}")
         import traceback
         traceback.print_exc()
-        pygame.quit()
         return None
+    finally:
+        if creator is not None:
+            creator.finalize()
 
 if __name__ == "__main__":
     character = run_character_creator()

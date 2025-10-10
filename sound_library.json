@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "name": "click_1",
+      "asset_type": "effect",
+      "category": "ui",
+      "tags": [
+        "ui",
+        "menu"
+      ],
+      "variants": [
+        {
+          "file": "click_1.wav",
+          "volume": 0.7,
+          "weight": 1.0
+        }
+      ],
+      "description": "UI confirmation click used for discoveries and menu confirms.",
+      "loop": false,
+      "stream": false,
+      "triggers": []
+    },
+    {
+      "name": "bat_squeak",
+      "asset_type": "effect",
+      "category": "ambient",
+      "tags": [
+        "ambient",
+        "bat"
+      ],
+      "variants": [
+        {
+          "file": "bat_squeak.mp3",
+          "volume": 0.75,
+          "weight": 1.0
+        }
+      ],
+      "description": "Ambient bat squeak variations.",
+      "loop": false,
+      "stream": false,
+      "triggers": []
+    },
+    {
+      "name": "dungeon_theme",
+      "asset_type": "music",
+      "category": "music",
+      "tags": [
+        "loop",
+        "background"
+      ],
+      "variants": [
+        {
+          "file": "Dungeon.mid",
+          "volume": 0.6,
+          "weight": 1.0
+        }
+      ],
+      "description": "Primary dungeon exploration theme.",
+      "loop": true,
+      "stream": true,
+      "triggers": []
+    },
+    {
+      "name": "water_drip",
+      "asset_type": "effect",
+      "category": "ambient",
+      "tags": [
+        "ambient",
+        "water"
+      ],
+      "variants": [
+        {
+          "file": "water_drip.mp3",
+          "volume": 0.65,
+          "weight": 1.0
+        }
+      ],
+      "description": "Water drip ambience variant.",
+      "loop": false,
+      "stream": false,
+      "triggers": []
+    },
+    {
+      "name": "title1",
+      "asset_type": "music",
+      "category": "general",
+      "tags": [],
+      "variants": [
+        {
+          "file": "Title.mid",
+          "volume": 0.8,
+          "weight": 1.0,
+          "storage_key": "assets/title1/d9b1a9edabf74c5194623a5a2a551dad.mid",
+          "original_file": "Title.mid"
+        }
+      ],
+      "description": "",
+      "loop": true,
+      "stream": true,
+      "triggers": []
+    }
+  ]
+}

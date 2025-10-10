@@ -101,9 +101,55 @@ For more details, see [CHARACTER_INTEGRATION.md](CHARACTER_INTEGRATION.md)
 - Unseen: black
 - Player: red square
 
+## Sound Manager
+
+**NEW:** Complete mouse-driven sound library manager with trigger system!
+
+### Features
+- **Mouse-Navigable UI**: Click to select assets, edit metadata, manage sounds
+- **Import/Export**: Full support for MP3, WAV, and MIDI files
+- **Trigger System**: Assign game events to sounds (e.g., "finding_secret", "combat_hit")
+- **High-Quality Playback**: Fixed MP3 playback (44.1kHz, no static)
+- **Variant Management**: Multiple sound files per asset for randomization
+
+### Run Sound Manager
+```powershell
+python sound_manager_ui.py
+```
+
+### Documentation
+- **[SOUND_MANAGER_GUIDE.md](SOUND_MANAGER_GUIDE.md)** - Complete UI guide
+- **[SOUND_TRIGGER_GUIDE.md](SOUND_TRIGGER_GUIDE.md)** - Trigger system documentation
+
+### Using Sounds in Game Code
+```python
+from sound_library import get_sound_library
+
+library = get_sound_library()
+
+# Play by name
+library.play_sound("click_1")
+
+# Play by trigger event
+library.play_trigger_sound("finding_secret")
+```
+
+### Common Triggers
+The system includes 32 built-in triggers like:
+- `finding_secret`, `discovering_treasure`
+- `opening_door`, `closing_door`
+- `player_footstep`, `player_jump`, `player_damage`
+- `combat_hit`, `combat_miss`, `combat_critical`
+- `enemy_attack`, `enemy_death`
+- `item_pickup`, `spell_cast`
+- `ui_click`, `menu_open`
+
+Plus custom triggers for your specific game events!
+
 ## Notes
 
 - Grid size is fixed to 80x40 in windowed mode (each cell is 20x30 pixels).
 - Lighting radius is 3 tiles; tweak `LIGHT_RADIUS` in `main.py`.
 - Generation uses simple rooms and corridors.
 - If you need the terminal renderer, call `run_terminal()` from `main()` manually.
+- **Sound playback fixed**: MP3s now play correctly at 44.1kHz (no static)
